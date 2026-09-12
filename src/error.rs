@@ -10,6 +10,8 @@ pub enum AppError {
     Config(String),
     #[error("Database error: {0}")]
     Db(#[from] sqlx::Error),
+    #[error("Database migration error: {0}")]
+    Migration(#[from] sqlx::migrate::MigrateError),
     #[error("R2 storage error: {0}")]
     R2(String),
     #[error("Authentication error: {0}")]
@@ -30,6 +32,7 @@ impl IntoResponse for AppError {
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::Config(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.clone()),
             AppError::Db(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            AppError::Migration(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
             AppError::R2(msg) => (StatusCode::BAD_GATEWAY, msg.clone()),
             AppError::Io(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         };
@@ -86,6 +89,13 @@ mod tests {
             std::io::ErrorKind::NotFound,
             "file not found",
         ));
+        let res = err.into_response();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_migration_status() {
+        let err = AppError::Migration(sqlx::migrate::MigrateError::VersionMissing(1));
         let res = err.into_response();
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }

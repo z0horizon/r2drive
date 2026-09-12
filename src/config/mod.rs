@@ -1,7 +1,7 @@
 pub mod model;
 
-use std::path::{Path, PathBuf};
 use crate::error::AppError;
+use std::path::{Path, PathBuf};
 
 pub use model::{BucketProfile, Config, DatabaseConfig, ServerConfig, SyncConfig};
 
@@ -102,9 +102,8 @@ pub fn substitute_env_vars(raw: &str) -> Result<String, AppError> {
 /// Parse configuration from a YAML string, performing environment variable substitution.
 pub fn parse_config_str(content: &str) -> Result<Config, AppError> {
     let substituted = substitute_env_vars(content)?;
-    serde_yaml::from_str::<Config>(&substituted).map_err(|e| {
-        AppError::Config(format!("Failed to parse YAML configuration: {e}"))
-    })
+    serde_yaml::from_str::<Config>(&substituted)
+        .map_err(|e| AppError::Config(format!("Failed to parse YAML configuration: {e}")))
 }
 
 /// Resolve default configuration file paths in order of precedence:
@@ -401,7 +400,8 @@ profiles:
         let profile = config.get_profile("primary").unwrap();
         assert_eq!(profile.account_id, "acc_real");
 
-        let raw = "# key: ${TEST_UNSET_VAR_COMMENT_1}\nkey: static_val\n  # ${TEST_UNSET_VAR_COMMENT_2}";
+        let raw =
+            "# key: ${TEST_UNSET_VAR_COMMENT_1}\nkey: static_val\n  # ${TEST_UNSET_VAR_COMMENT_2}";
         let substituted = substitute_env_vars(raw).unwrap();
         assert_eq!(substituted, raw);
     }

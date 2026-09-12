@@ -1,8 +1,8 @@
+use crate::error::AppError;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::str::FromStr;
-use serde::{Deserialize, Serialize};
-use crate::error::AppError;
 
 fn default_host() -> String {
     "0.0.0.0".to_string()
