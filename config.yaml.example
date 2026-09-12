@@ -31,7 +31,7 @@ sync:
 default_profile: "primary"
 
 # R2 Bucket profiles
-# Environment variable substitution (${VAR_NAME}) is supported across all fields
+# Environment variable substitution ($VAR_NAME) is supported across all fields
 profiles:
   primary:
     # Cloudflare account ID

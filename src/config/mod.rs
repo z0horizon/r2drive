@@ -5,82 +5,97 @@ use crate::error::AppError;
 
 pub use model::{BucketProfile, Config, DatabaseConfig, ServerConfig, SyncConfig};
 
-/// Substitute `${VAR_NAME}` and `${VAR_NAME:-default}` occurrences in raw configuration string
-/// using environment variables.
-pub fn substitute_env_vars(raw: &str) -> Result<String, AppError> {
-    let mut result = String::with_capacity(raw.len());
-    let mut chars = raw.char_indices().peekable();
+fn substitute_line(line: &str) -> Result<String, AppError> {
+    let mut result = String::with_capacity(line.len());
+    let mut chars = line.char_indices().peekable();
     let mut last_idx = 0;
 
     while let Some((i, c)) = chars.next() {
-        if c == '$' {
-            if let Some(&(next_i, next_c)) = chars.peek() {
-                if next_c == '$' {
-                    let after_second_dollar = next_i + next_c.len_utf8();
-                    if raw[after_second_dollar..].starts_with('{') {
-                        // Escaped placeholder: "$${VAR}" -> "${VAR}"
-                        result.push_str(&raw[last_idx..i]);
-                        result.push('$');
-                        chars.next(); // consume second '$'
-                        last_idx = after_second_dollar;
-                        continue;
-                    }
-                } else if next_c == '{' {
-                    result.push_str(&raw[last_idx..i]);
-                    chars.next(); // consume '{'
-                    let start_var = next_i + 1;
-                    let mut end_var = None;
+        if c != '$' {
+            continue;
+        }
 
-                    for (j, c2) in chars.by_ref() {
-                        if c2 == '}' {
-                            end_var = Some(j);
-                            break;
-                        }
-                    }
+        let Some(&(next_i, next_c)) = chars.peek() else {
+            continue;
+        };
 
-                    let end = end_var.ok_or_else(|| {
-                        AppError::Config(
-                            "Unclosed environment variable substitution: missing '}'".to_string(),
-                        )
-                    })?;
+        if next_c == '$' {
+            let after_second_dollar = next_i + next_c.len_utf8();
+            if line[after_second_dollar..].starts_with('{') {
+                // Escaped placeholder: "$${VAR}" -> "${VAR}"
+                result.push_str(&line[last_idx..i]);
+                result.push('$');
+                chars.next(); // consume second '$'
+                last_idx = after_second_dollar;
+            }
+        } else if next_c == '{' {
+            result.push_str(&line[last_idx..i]);
+            chars.next(); // consume '{'
+            let start_var = next_i + 1;
+            let mut end_var = None;
 
-                    let var_spec = &raw[start_var..end];
-                    if var_spec.trim().is_empty() {
-                        return Err(AppError::Config(
-                            "Empty environment variable substitution '${}'".to_string(),
-                        ));
-                    }
-
-                    let (var_name, default_val) = if let Some(sep) = var_spec.find(":-") {
-                        (&var_spec[..sep], Some(&var_spec[sep + 2..]))
-                    } else {
-                        (var_spec, None)
-                    };
-
-                    let val = match std::env::var(var_name) {
-                        Ok(v) if !v.is_empty() => v,
-                        Ok(_) => match default_val {
-                            Some(def) => def.to_string(),
-                            None => String::new(),
-                        },
-                        Err(_) => match default_val {
-                            Some(def) => def.to_string(),
-                            None => {
-                                return Err(AppError::Config(format!(
-                                    "Environment variable '{}' is not set",
-                                    var_name
-                                )));
-                            }
-                        },
-                    };
-
-                    result.push_str(&val);
-                    last_idx = end + 1;
+            for (j, c2) in chars.by_ref() {
+                if c2 == '}' {
+                    end_var = Some(j);
+                    break;
                 }
             }
+
+            let end = end_var.ok_or_else(|| {
+                AppError::Config(
+                    "Unclosed environment variable substitution: missing '}'".to_string(),
+                )
+            })?;
+
+            let var_spec = &line[start_var..end];
+            if var_spec.trim().is_empty() {
+                return Err(AppError::Config(
+                    "Empty environment variable substitution '${}'".to_string(),
+                ));
+            }
+
+            let (var_name, default_val) = if let Some(sep) = var_spec.find(":-") {
+                (&var_spec[..sep], Some(&var_spec[sep + 2..]))
+            } else {
+                (var_spec, None)
+            };
+
+            let val = match std::env::var(var_name) {
+                Ok(v) if !v.is_empty() => v,
+                Ok(_) => match default_val {
+                    Some(def) => def.to_string(),
+                    None => String::new(),
+                },
+                Err(_) => match default_val {
+                    Some(def) => def.to_string(),
+                    None => {
+                        return Err(AppError::Config(format!(
+                            "Environment variable '{}' is not set",
+                            var_name
+                        )));
+                    }
+                },
+            };
+
+            result.push_str(&val);
+            last_idx = end + 1;
         }
     }
-    result.push_str(&raw[last_idx..]);
+    result.push_str(&line[last_idx..]);
+    Ok(result)
+}
+
+/// Substitute `${VAR_NAME}` and `${VAR_NAME:-default}` occurrences in raw configuration string
+/// using environment variables. Commented lines starting with `#` are preserved as-is.
+pub fn substitute_env_vars(raw: &str) -> Result<String, AppError> {
+    let mut result = String::with_capacity(raw.len());
+    for line in raw.split_inclusive('\n') {
+        if line.trim_start().starts_with('#') {
+            result.push_str(line);
+        } else {
+            result.push_str(&substitute_line(line)?);
+        }
+    }
     Ok(result)
 }
 
@@ -99,21 +114,19 @@ pub fn parse_config_str(content: &str) -> Result<Config, AppError> {
 pub fn resolve_default_config_path() -> Option<PathBuf> {
     let mut candidates = Vec::new();
 
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.trim().is_empty() {
-            candidates.push(
-                PathBuf::from(home)
-                    .join(".config")
-                    .join("r2drive")
-                    .join("config.yaml"),
-            );
-        }
+    if let Some(home) = std::env::var("HOME").ok().filter(|h| !h.trim().is_empty()) {
+        candidates.push(
+            PathBuf::from(home)
+                .join(".config")
+                .join("r2drive")
+                .join("config.yaml"),
+        );
     }
 
     candidates.push(PathBuf::from("/etc/r2drive/config.yaml"));
     candidates.push(PathBuf::from("./config.yaml"));
 
-    candidates.into_iter().find(|p| p.exists())
+    candidates.into_iter().find(|p| p.is_file())
 }
 
 /// Load configuration from a specific file path.
@@ -140,10 +153,11 @@ pub fn load(path: Option<&Path>) -> Result<Config, AppError> {
         return load_from_path(explicit_path);
     }
 
-    if let Ok(env_path) = std::env::var("R2DRIVE_CONFIG") {
-        if !env_path.trim().is_empty() {
-            return load_from_path(Path::new(&env_path));
-        }
+    if let Some(env_path) = std::env::var("R2DRIVE_CONFIG")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+    {
+        return load_from_path(Path::new(&env_path));
     }
 
     if let Some(default_path) = resolve_default_config_path() {
@@ -358,5 +372,50 @@ server:
         unsafe {
             std::env::remove_var("R2DRIVE_CONFIG");
         }
+    }
+
+    #[test]
+    fn test_commented_out_env_var_ignored() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        unsafe {
+            std::env::remove_var("TEST_UNSET_VAR_COMMENT_1");
+            std::env::remove_var("TEST_UNSET_VAR_COMMENT_2");
+        }
+
+        let yaml = r#"
+# account_id: "${TEST_UNSET_VAR_COMMENT_1}"
+#   Indented comment with ${TEST_UNSET_VAR_COMMENT_2}
+server:
+  port: 8080
+default_profile: "primary"
+profiles:
+  primary:
+    account_id: "acc_real"
+    access_key_id: "key_real"
+    secret_access_key: "secret_real"
+    bucket_name: "bucket_real"
+"#;
+        let config = parse_config_str(yaml)
+            .expect("Commented lines with unset variables should not trigger an error");
+        assert_eq!(config.server.port, 8080);
+        let profile = config.get_profile("primary").unwrap();
+        assert_eq!(profile.account_id, "acc_real");
+
+        let raw = "# key: ${TEST_UNSET_VAR_COMMENT_1}\nkey: static_val\n  # ${TEST_UNSET_VAR_COMMENT_2}";
+        let substituted = substitute_env_vars(raw).unwrap();
+        assert_eq!(substituted, raw);
+    }
+
+    #[test]
+    fn test_config_from_str_trait() {
+        let yaml = r#"
+server:
+  port: 9999
+"#;
+        let config: Config = yaml.parse().expect("Failed to parse via FromStr");
+        assert_eq!(config.server.port, 9999);
+
+        let config2 = Config::from_str(yaml).expect("Failed to parse via Config::from_str");
+        assert_eq!(config2.server.port, 9999);
     }
 }

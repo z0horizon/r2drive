@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use crate::error::AppError;
 
@@ -92,7 +93,7 @@ impl Default for SyncConfig {
 }
 
 /// Credentials and settings for a Cloudflare R2 bucket profile.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct BucketProfile {
     pub account_id: String,
     pub access_key_id: String,
@@ -100,18 +101,6 @@ pub struct BucketProfile {
     pub bucket_name: String,
     #[serde(default)]
     pub public_url: Option<String>,
-}
-
-impl Default for BucketProfile {
-    fn default() -> Self {
-        Self {
-            account_id: String::new(),
-            access_key_id: String::new(),
-            secret_access_key: String::new(),
-            bucket_name: String::new(),
-            public_url: None,
-        }
-    }
 }
 
 /// Root configuration structure for r2drive.
@@ -141,6 +130,14 @@ impl Default for Config {
     }
 }
 
+impl FromStr for Config {
+    type Err = AppError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        crate::config::parse_config_str(s)
+    }
+}
+
 impl Config {
     /// Load configuration from an optional explicit path or default discovery paths.
     pub fn load(path: Option<&Path>) -> Result<Self, AppError> {
@@ -148,8 +145,9 @@ impl Config {
     }
 
     /// Parse configuration from a raw YAML string with environment substitution.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(content: &str) -> Result<Self, AppError> {
-        crate::config::parse_config_str(content)
+        content.parse()
     }
 
     /// Retrieve a bucket profile by name.
