@@ -8,6 +8,10 @@ use super::models::{BucketRecord, DbObject, MultipartSessionRecord, PrefixSyncSt
 use super::repo::MetadataRepo;
 use crate::error::AppError;
 
+fn format_datetime(dt: &DateTime<Utc>) -> String {
+    dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
 fn parse_datetime(s: &str) -> Result<DateTime<Utc>, AppError> {
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
         return Ok(dt.with_timezone(&Utc));
@@ -21,8 +25,8 @@ fn parse_datetime(s: &str) -> Result<DateTime<Utc>, AppError> {
     if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f") {
         return Ok(naive.and_utc());
     }
-    Err(AppError::Config(format!(
-        "Failed to parse datetime '{s}' as RFC3339 or SQLite timestamp"
+    Err(AppError::Db(sqlx::Error::Decode(
+        format!("Failed to parse datetime '{s}' as RFC3339 or SQLite timestamp").into(),
     )))
 }
 
@@ -44,10 +48,13 @@ impl SqliteMetadataRepo {
                 .busy_timeout(std::time::Duration::from_secs(5))
         };
 
-        let pool = SqlitePoolOptions::new()
-            .max_connections(if is_memory { 1 } else { 16 })
-            .connect_with(options)
-            .await?;
+        let mut pool_options =
+            SqlitePoolOptions::new().max_connections(if is_memory { 1 } else { 16 });
+        if is_memory {
+            pool_options = pool_options.idle_timeout(None);
+        }
+
+        let pool = pool_options.connect_with(options).await?;
 
         sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
 
@@ -138,8 +145,8 @@ impl MetadataRepo for SqliteMetadataRepo {
             .bind(obj.size_bytes)
             .bind(&obj.etag)
             .bind(&obj.content_type)
-            .bind(obj.last_modified.to_rfc3339())
-            .bind(obj.synced_at.to_rfc3339())
+            .bind(format_datetime(&obj.last_modified))
+            .bind(format_datetime(&obj.synced_at))
             .execute(&mut *tx)
             .await?;
         }
@@ -204,7 +211,7 @@ impl MetadataRepo for SqliteMetadataRepo {
         )
         .bind(&status.bucket_profile)
         .bind(&status.prefix)
-        .bind(status.last_synced_at.to_rfc3339())
+        .bind(format_datetime(&status.last_synced_at))
         .execute(&self.pool)
         .await?;
 
@@ -247,8 +254,8 @@ impl MetadataRepo for SqliteMetadataRepo {
             "#,
         )
         .bind(&session.token_hash)
-        .bind(session.created_at.to_rfc3339())
-        .bind(session.expires_at.to_rfc3339())
+        .bind(format_datetime(&session.created_at))
+        .bind(format_datetime(&session.expires_at))
         .execute(&self.pool)
         .await?;
 
@@ -327,8 +334,8 @@ impl MetadataRepo for SqliteMetadataRepo {
         .bind(session.file_size)
         .bind(session.part_size)
         .bind(session.total_parts)
-        .bind(session.created_at.to_rfc3339())
-        .bind(session.last_activity_at.to_rfc3339())
+        .bind(format_datetime(&session.created_at))
+        .bind(format_datetime(&session.last_activity_at))
         .execute(&self.pool)
         .await?;
 
@@ -353,7 +360,7 @@ impl MetadataRepo for SqliteMetadataRepo {
         &self,
         older_than: DateTime<Utc>,
     ) -> Result<Vec<MultipartSessionRecord>, AppError> {
-        let older_than_str = older_than.to_rfc3339();
+        let older_than_str = format_datetime(&older_than);
         let rows = sqlx::query(
             r#"
             SELECT upload_id, bucket_profile, object_key, file_size, part_size, total_parts, created_at, last_activity_at
@@ -427,7 +434,7 @@ impl MetadataRepo for SqliteMetadataRepo {
         .bind(&bucket.profile_name)
         .bind(&bucket.bucket_name)
         .bind(&bucket.account_id)
-        .bind(bucket.created_at.to_rfc3339())
+        .bind(format_datetime(&bucket.created_at))
         .execute(&self.pool)
         .await?;
 
@@ -655,5 +662,27 @@ mod tests {
         assert_eq!(fetched.profile_name, "primary");
         assert_eq!(fetched.bucket_name, "my-r2-bucket");
         assert_eq!(fetched.account_id, "acc_123");
+    }
+
+    #[test]
+    fn test_parse_datetime_invalid_returns_db_decode_error() {
+        let err = parse_datetime("not-a-datetime").unwrap_err();
+        match err {
+            AppError::Db(sqlx::Error::Decode(msg)) => {
+                assert!(msg.to_string().contains("Failed to parse datetime"));
+            }
+            other => panic!("Expected AppError::Db(sqlx::Error::Decode), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_format_datetime_precision_and_z() {
+        let now = Utc::now();
+        let formatted = format_datetime(&now);
+        assert!(formatted.ends_with('Z'));
+        // Format: YYYY-MM-DDTHH:MM:SS.mmmZ (24 chars)
+        assert_eq!(formatted.len(), 24);
+        let parsed = parse_datetime(&formatted).unwrap();
+        assert_eq!(parsed.timestamp_millis(), now.timestamp_millis());
     }
 }

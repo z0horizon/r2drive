@@ -2,9 +2,9 @@ pub mod models;
 pub mod repo;
 pub mod sqlite;
 
-use self::repo::MetadataRepo;
-use self::sqlite::SqliteMetadataRepo;
 use crate::error::AppError;
+pub use repo::MetadataRepo;
+pub use sqlite::SqliteMetadataRepo;
 use std::sync::Arc;
 
 pub async fn create_metadata_store(url: &str) -> Result<Arc<dyn MetadataRepo>, AppError> {
