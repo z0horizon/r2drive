@@ -264,7 +264,7 @@ describe('Transfers API (transfers.ts)', () => {
   it('resumeUpload calls /upload/resume with upload_id', async () => {
     const mockResume = {
       upload_id: 'up-123',
-      completed_parts: [1],
+      completed_parts: [{ part_number: 1, etag: '"etag-1"' }],
       remaining_parts: [{ part_number: 2, url: 'https://part2.url' }],
     };
     globalThis.fetch = vi.fn().mockResolvedValue(

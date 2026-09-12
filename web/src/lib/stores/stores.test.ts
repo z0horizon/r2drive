@@ -126,7 +126,7 @@ describe('BucketStore (bucket.svelte.ts)', () => {
     expect(listSpy).toHaveBeenCalledWith('secondary', '', false);
   });
 
-  it('setPrefix normalizes leading slashes and fetches objects', async () => {
+  it('setPrefix normalizes leading slashes and appends trailing slash', async () => {
     const store = new BucketStore();
     store.selectedProfile = 'primary';
     const listSpy = vi.spyOn(objectsApi, 'listObjects').mockResolvedValue({
@@ -136,7 +136,7 @@ describe('BucketStore (bucket.svelte.ts)', () => {
       synced_at: '2026-09-12T00:00:00Z',
     });
 
-    await store.setPrefix('/nested/dir/');
+    await store.setPrefix('/nested/dir');
     expect(store.currentPrefix).toBe('nested/dir/');
     expect(listSpy).toHaveBeenCalledWith('primary', 'nested/dir/', false);
   });
@@ -202,6 +202,26 @@ describe('UploadStore (upload.svelte.ts)', () => {
     expect(updated.speed).toBe(102400);
     expect(updated.uploadedBytes).toBe(500);
     expect(store.isUploading).toBe(true);
+  });
+
+  it('updateProgress ignores items in terminal states', () => {
+    const store = new UploadStore();
+    const fakeFile = new File(['abc'], 'test.txt');
+    const item = store.add({ file: fakeFile, key: 'test.txt', profile: 'primary' });
+
+    store.markComplete(item.id);
+    store.updateProgress(item.id, 50, 100, 50);
+    expect(item.status).toBe('completed');
+    expect(item.progress).toBe(100);
+
+    store.markFailed(item.id, 'Failure');
+    store.updateProgress(item.id, 20, 100, 20);
+    expect(item.status).toBe('failed');
+    expect(item.error).toBe('Failure');
+
+    store.markAborted(item.id);
+    store.updateProgress(item.id, 10, 100, 10);
+    expect(item.status).toBe('aborted');
   });
 
   it('marks upload complete, failed, and aborted', () => {

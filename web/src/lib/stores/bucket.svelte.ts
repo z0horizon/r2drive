@@ -89,6 +89,9 @@ export class BucketStore {
     if (normalized.startsWith('/')) {
       normalized = normalized.slice(1);
     }
+    if (normalized && !normalized.endsWith('/')) {
+      normalized += '/';
+    }
     this.currentPrefix = normalized;
     await this.fetchObjects(false);
   }

@@ -23,15 +23,15 @@ export interface MultipartUploadInitResponse {
 
 export type InitUploadResponse = SingleUploadInitResponse | MultipartUploadInitResponse;
 
-export interface ResumeUploadResponse {
-  upload_id: string;
-  completed_parts: number[];
-  remaining_parts: PresignedPart[];
-}
-
 export interface CompletedPart {
   part_number: number;
   etag: string;
+}
+
+export interface ResumeUploadResponse {
+  upload_id: string;
+  completed_parts: CompletedPart[];
+  remaining_parts: PresignedPart[];
 }
 
 export interface CompleteUploadResponse {

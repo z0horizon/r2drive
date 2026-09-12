@@ -116,6 +116,10 @@ export class UploadStore {
     const item = this.items.find((i) => i.id === id);
     if (!item) return;
 
+    if (item.status === 'failed' || item.status === 'aborted' || item.status === 'completed') {
+      return;
+    }
+
     item.progress = Math.min(100, Math.max(0, progress));
     item.speed = speed;
     if (uploadedBytes !== undefined) {
