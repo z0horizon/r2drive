@@ -179,10 +179,8 @@ impl Cli {
                 rm::execute(&bucket, remote_key).await?;
             }
             Commands::Serve { port, headless } => {
-                println!(
-                    "Server will be implemented in Task 6 (port: {:?}, headless: {})",
-                    port, headless
-                );
+                let config = Config::load(config_path)?;
+                crate::server::run(config, *port, *headless).await?;
             }
         }
 
@@ -198,7 +196,10 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    fn make_test_config(profiles: HashMap<String, BucketProfile>, default_profile: &str) -> NamedTempFile {
+    fn make_test_config(
+        profiles: HashMap<String, BucketProfile>,
+        default_profile: &str,
+    ) -> NamedTempFile {
         let mut file = NamedTempFile::new().unwrap();
         let config = Config {
             default_profile: default_profile.to_string(),
@@ -227,7 +228,8 @@ mod tests {
         profiles.insert("secondary".to_string(), sample_profile("bucket-sec"));
 
         let file = make_test_config(profiles, "primary");
-        let (prof, bucket) = resolve_bucket_with_profile(Some(file.path()), Some("secondary")).unwrap();
+        let (prof, bucket) =
+            resolve_bucket_with_profile(Some(file.path()), Some("secondary")).unwrap();
         assert_eq!(prof, "secondary");
         assert_eq!(bucket.name(), "bucket-sec");
     }

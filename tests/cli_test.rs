@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use assert_cmd::cargo::CommandCargoExt;
 use predicates::prelude::*;
 
 #[test]
@@ -81,12 +82,72 @@ fn test_cli_subcommands_help() {
 
 #[test]
 fn test_cli_serve_execution() {
+    use std::io::Write;
+    use std::net::TcpStream;
+    use std::time::{Duration, Instant};
+
+    let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+    let yaml = r#"
+server:
+  host: "127.0.0.1"
+  port: 18088
+  admin_password: "test-password"
+database:
+  url: "sqlite::memory:"
+profiles:
+  primary:
+    account_id: "0123456789abcdef0123456789abcdef"
+    access_key_id: "test-access-key"
+    secret_access_key: "test-secret-key"
+    bucket_name: "test-bucket"
+"#;
+    temp_file.write_all(yaml.as_bytes()).unwrap();
+
+    let mut cmd = std::process::Command::cargo_bin("r2drive").unwrap();
+    cmd.args([
+        "-c",
+        temp_file.path().to_str().unwrap(),
+        "serve",
+        "--headless",
+        "-P",
+        "18088",
+    ]);
+
+    let mut child = cmd.spawn().expect("Failed to spawn r2drive serve");
+
+    let start = Instant::now();
+    let mut connected = false;
+    while start.elapsed() < Duration::from_secs(5) {
+        if TcpStream::connect("127.0.0.1:18088").is_ok() {
+            connected = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        connected,
+        "Server did not accept connections on port 18088 within timeout"
+    );
+}
+
+#[test]
+fn test_cli_serve_missing_config_fails() {
     let mut cmd = Command::cargo_bin("r2drive").unwrap();
-    cmd.args(["serve", "--headless", "-P", "8088"]);
+    cmd.args([
+        "-c",
+        "/path/that/does/not/exist.yaml",
+        "serve",
+        "--headless",
+        "-P",
+        "8088",
+    ]);
     cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("Server will be implemented in Task 6"))
-        .stdout(predicate::str::contains("8088"));
+        .failure()
+        .stderr(predicate::str::contains("Configuration file not found"));
 }
 
 #[test]
