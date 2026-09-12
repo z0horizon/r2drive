@@ -21,28 +21,32 @@ A self-hosted Cloudflare R2 drive service packaged as a Docker container, provid
 
 **Goal**: Deliver a fully functional, self-hosted Docker service and CLI for browsing, uploading, and managing Cloudflare R2 buckets.
 
-- [ ] **1.1 Core CLI Engine**
-  - [ ] Initialize Cargo workspace and crate setup linking `r2kit`
-  - [ ] CLI command suite: `r2drive ls`, `r2drive upload`, `r2drive download`, `r2drive rm`, `r2drive cat`
-  - [ ] Resumable CLI upload engine: auto-persists `MultipartSessionSnapshot` to `~/.cache/r2drive/uploads/` on interruption and resumes via `r2kit`
-  - [ ] YAML configuration loader (`config.yaml`) supporting multiple `BucketProfile` entries
-- [ ] **1.2 StorageNode & Persistence Layer**
-  - [ ] Embedded SQLite `MetadataStore` with migrations (buckets, cached objects, folders, active multipart sessions)
-  - [ ] On-demand `CacheFreshness` sync engine with configurable TTL and manual force-refresh
-  - [ ] REST API: Authentication (`AdminSession`), Bucket management, Object browsing, Presigned URLs
-  - [ ] Resumable upload coordinator: `upload/init`, `upload/resume`, `upload/complete`, and `upload/abort` endpoints
-  - [ ] Automated 24-hour `StaleUploadCleanup` background worker aborting abandoned multipart sessions
-- [ ] **1.3 WebConsole (SPA with Svelte 5)**
-  - [ ] Responsive file explorer layout (folder tree, grid/list view, breadcrumbs)
-  - [ ] Admin login screen
-  - [ ] Multi-bucket switcher selector
-  - [ ] Drag-and-drop direct-to-R2 presigned uploader with chunked progress tracking
-  - [ ] Resumable upload UX: transient auto-retry (exponential backoff) and reload resume prompt via `IndexedDB`
-  - [ ] File download and deletion actions
-- [ ] **1.4 Packaging & Release**
-  - [ ] Embed WebConsole assets into Rust binary via `rust-embed`
-  - [ ] Multi-stage `Dockerfile` producing slim all-in-one container (~45MB)
-  - [ ] Headless mode toggle (`--headless` flag / `R2DRIVE_HEADLESS=true`)
+- [x] **1.1 Core CLI Engine**
+  - [x] Initialize Cargo workspace and crate setup linking `r2kit`
+  - [x] CLI command suite: `r2drive ls`, `r2drive upload`, `r2drive download`, `r2drive rm`, `r2drive cat`
+  - [x] Resumable CLI upload engine: auto-persists `MultipartSessionSnapshot` to `~/.cache/r2drive/uploads/` on interruption and resumes via `r2kit`
+  - [x] YAML configuration loader (`config.yaml`) supporting multiple `BucketProfile` entries
+- [x] **1.2 StorageNode & Persistence Layer**
+  - [x] Embedded SQLite `MetadataStore` with migrations (buckets, cached objects, folders, active multipart sessions)
+  - [x] On-demand `CacheFreshness` sync engine with configurable TTL and manual force-refresh
+  - [x] REST API: Authentication (`AdminSession`), Bucket management, Object browsing, Presigned URLs
+  - [x] Resumable upload coordinator: `upload/init`, `upload/resume`, `upload/complete`, and `upload/abort` endpoints
+  - [x] Automated 24-hour `StaleUploadCleanup` background worker aborting abandoned multipart sessions
+- [x] **1.3 WebConsole (SPA with Svelte 5)**
+  - [x] Responsive file explorer layout (folder tree, grid/list view, breadcrumbs)
+  - [x] Admin login screen
+  - [x] Multi-bucket switcher selector
+  - [x] Drag-and-drop direct-to-R2 presigned uploader with chunked progress tracking
+  - [x] Resumable upload UX: transient auto-retry (exponential backoff) and reload resume prompt via `IndexedDB`
+  - [x] File download and deletion actions
+- [x] **1.4 Packaging & Release**
+  - [x] Embed WebConsole assets into Rust binary via `rust-embed`
+  - [x] Multi-stage `Dockerfile` producing slim all-in-one container (~45MB)
+  - [x] Headless mode toggle (`--headless` flag / `R2DRIVE_HEADLESS=true`)
+- [ ] **1.5 CORS Diagnostic & Resilient Upload Fallback** (Follow-up)
+  - [ ] Proactive preflight health check probe on bucket selection with warning banner
+  - [ ] Smart CORS configuration guide modal with 1-click JSON copy and Cloudflare deep link
+  - [ ] Automatic server-proxy streaming upload fallback (`POST /api/buckets/{profile}/upload/proxy`) when browser direct PUT is blocked by CORS
 
 ---
 
