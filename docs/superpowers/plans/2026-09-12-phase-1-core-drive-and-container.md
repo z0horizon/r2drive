@@ -559,25 +559,25 @@ git commit -m "feat(web): implement Explorer UI, breadcrumbs, and LoginModal"
 **Interfaces:**
 - Produces: Drag & drop file upload with 10MB chunk slicing, direct-to-R2 upload, concurrency limiter (4 parts in flight), IndexedDB persistence, and resume on reload.
 
-- [ ] **Step 1: Implement `indexeddb.ts` for transfer manifest persistence**
+- [x] **Step 1: Implement `indexeddb.ts` for transfer manifest persistence**
 
 Store `{ uploadId, key, profile, fileSize, partSize, completedParts }`.
 
-- [ ] **Step 2: Implement `worker.ts` chunker and uploader**
+- [x] **Step 2: Implement `worker.ts` chunker and uploader**
   - Small files (<10MB): single PUT upload.
   - Large files (>=10MB): slices `Blob`s, uploads parts in parallel with exponential backoff on retry (up to 5 attempts), collects ETags, calls `completeUpload`.
 
-- [ ] **Step 3: Implement DropZone and UploadModal UI**
+- [x] **Step 3: Implement DropZone and UploadModal UI**
   - Full-screen drop overlay highlighting on dragover.
   - Floating upload manager panel (bottom-right) showing transfer progress, speed, and cancel button.
   - Resume alert banner when IndexedDB detects unfinished sessions on page load.
 
-- [ ] **Step 4: Verify frontend build**
+- [x] **Step 4: Verify frontend build**
 
 Run: `cd web && pnpm build`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/lib/upload/ web/src/components/upload/ web/src/App.svelte
