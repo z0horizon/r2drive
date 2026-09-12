@@ -1,5 +1,6 @@
 use crate::error::AppError;
 use serde::{Deserialize, Serialize};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 /// Serializable data representation of a multipart session snapshot.
@@ -22,10 +23,27 @@ pub fn get_cache_dir() -> PathBuf {
     }
 }
 
-/// Generates a sanitized snapshot cache file path for a given bucket and object key.
+/// Generates a sanitized and bounded snapshot cache file path for a given bucket and object key.
+/// Bounded to ensure it never exceeds filesystem limits (<= 255 bytes).
 pub fn snapshot_path_for(bucket_name: &str, key: &str) -> PathBuf {
-    let sanitized_key = key.replace(['/', '\\', ' ', ':', '.'], "_");
-    let filename = format!("{}_{}.json", bucket_name, sanitized_key);
+    let mut hasher = DefaultHasher::new();
+    bucket_name.hash(&mut hasher);
+    key.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    // Sanitize and limit prefix to at most 60 chars to avoid ENAMETOOLONG
+    let sanitized_key: String = key
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .take(60)
+        .collect();
+    let sanitized_bucket: String = bucket_name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .take(30)
+        .collect();
+
+    let filename = format!("{}_{}_{:016x}.json", sanitized_bucket, sanitized_key, hash);
     get_cache_dir().join(filename)
 }
 
@@ -125,8 +143,19 @@ pub async fn execute(
     let snap_file = snapshot_path_for(bucket.name(), &resolved_key);
 
     let resumed_builder = try_resume_snapshot(bucket, &snap_file, &resolved_key, file_size).await;
+    let was_resuming = resumed_builder.is_some();
 
-    let builder = match resumed_builder {
+    // Setup cancellation signal hooked up to Ctrl+C
+    let cancellation = r2kit::ManagedUploadCancellation::new();
+    let cancel_handle = cancellation.clone();
+    let ctrl_c_task = tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            eprintln!("\nReceived interruption signal (Ctrl+C). Aborting transfer and preserving snapshot...");
+            cancel_handle.cancel();
+        }
+    });
+
+    let mut builder = match resumed_builder {
         Some(b) => b.abort_on_error(false),
         None => bucket
             .managed_multipart(&resolved_key)
@@ -134,7 +163,12 @@ pub async fn execute(
             .abort_on_error(false),
     };
 
-    match builder.upload_file(local_path).await {
+    builder = builder.cancellation_token(cancellation);
+
+    let upload_result = builder.upload_file(local_path).await;
+    ctrl_c_task.abort();
+
+    match upload_result {
         Ok(result) => {
             // Cleanup persisted snapshot on completion
             let _ = tokio::fs::remove_file(&snap_file).await;
@@ -147,14 +181,19 @@ pub async fn execute(
             Ok(())
         }
         Err(err) => {
-            if let Some(snapshot) = err.snapshot()
-                && let Ok(path) = save_snapshot(snapshot).await
-            {
-                eprintln!(
-                    "Upload interrupted. Saved resume snapshot to {}",
-                    path.display()
-                );
+            if let Some(snapshot) = err.snapshot() {
+                if let Ok(path) = save_snapshot(snapshot).await {
+                    eprintln!(
+                        "Upload interrupted. Saved resume snapshot to {}",
+                        path.display()
+                    );
+                }
+            } else if was_resuming {
+                // If resuming from an existing snapshot and upload permanently failed without a snapshot,
+                // purge the stale/corrupted snapshot file so subsequent runs don't get stuck.
+                let _ = tokio::fs::remove_file(&snap_file).await;
             }
+
             Err(crate::r2::map_r2_error(err.error().clone()))
         }
     }
@@ -168,7 +207,19 @@ mod tests {
     fn test_snapshot_path_sanitization() {
         let path = snapshot_path_for("my-bucket", "folder/sub/my file.txt");
         let filename = path.file_name().unwrap().to_str().unwrap();
-        assert_eq!(filename, "my-bucket_folder_sub_my_file_txt.json");
+        assert!(filename.starts_with("my-bucket_folder_sub_my_file_txt_"));
+        assert!(filename.ends_with(".json"));
+        assert!(filename.len() <= 255);
+    }
+
+    #[test]
+    fn test_snapshot_path_very_long_key() {
+        let long_key = "a".repeat(500);
+        let path = snapshot_path_for("my-bucket", &long_key);
+        let filename = path.file_name().unwrap().to_str().unwrap();
+        // Check that filename is well under the 255 character limit
+        assert!(filename.len() <= 120);
+        assert!(filename.ends_with(".json"));
     }
 
     #[test]

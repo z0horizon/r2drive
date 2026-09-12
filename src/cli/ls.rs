@@ -1,5 +1,6 @@
 use crate::error::AppError;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 /// Output structure for an item listed from R2.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -18,6 +19,7 @@ pub async fn list_items(
     recursive: bool,
 ) -> Result<Vec<LsItem>, AppError> {
     let mut items = Vec::new();
+    let mut seen_prefixes = HashSet::new();
     let mut continuation_token = None;
 
     loop {
@@ -38,12 +40,14 @@ pub async fn list_items(
 
         // Rolled up common prefixes (folders) when delimiter is '/'
         for prefix in page.common_prefixes() {
-            items.push(LsItem {
-                key: prefix.clone(),
-                size: 0,
-                last_modified: None,
-                etag: None,
-            });
+            if seen_prefixes.insert(prefix.clone()) {
+                items.push(LsItem {
+                    key: prefix.clone(),
+                    size: 0,
+                    last_modified: None,
+                    etag: None,
+                });
+            }
         }
 
         // Concrete objects
@@ -65,6 +69,9 @@ pub async fn list_items(
             break;
         }
     }
+
+    // Sort entries alphabetically by key
+    items.sort_by(|a, b| a.key.cmp(&b.key));
 
     Ok(items)
 }
@@ -168,5 +175,34 @@ mod tests {
         assert!(json.contains("\"key\":\"test.png\""));
         assert!(json.contains("\"size\":2048"));
         assert!(json.contains("\"etag\":\"etag_abc\""));
+    }
+
+    #[test]
+    fn test_ls_items_sorting() {
+        let mut items = [
+            LsItem {
+                key: "zeta.txt".to_string(),
+                size: 10,
+                last_modified: None,
+                etag: None,
+            },
+            LsItem {
+                key: "alpha/".to_string(),
+                size: 0,
+                last_modified: None,
+                etag: None,
+            },
+            LsItem {
+                key: "beta.txt".to_string(),
+                size: 20,
+                last_modified: None,
+                etag: None,
+            },
+        ];
+
+        items.sort_by(|a, b| a.key.cmp(&b.key));
+        assert_eq!(items[0].key, "alpha/");
+        assert_eq!(items[1].key, "beta.txt");
+        assert_eq!(items[2].key, "zeta.txt");
     }
 }

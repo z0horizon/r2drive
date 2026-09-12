@@ -1,16 +1,15 @@
 use crate::error::AppError;
-use tokio::io::AsyncWriteExt;
 
-/// Execute the `cat` subcommand.
+/// Execute the `cat` subcommand by streaming object bytes to stdout.
 pub async fn execute(bucket: &r2kit::Bucket, remote_key: &str) -> Result<(), AppError> {
-    let object_bytes = bucket
-        .get_bytes(remote_key)
+    let downloaded = bucket
+        .get(remote_key)
         .await
         .map_err(crate::r2::map_r2_error)?;
 
+    let mut reader = downloaded.into_body().into_async_read();
     let mut stdout = tokio::io::stdout();
-    stdout.write_all(&object_bytes.bytes).await?;
-    stdout.flush().await?;
+    tokio::io::copy(&mut reader, &mut stdout).await?;
 
     Ok(())
 }
