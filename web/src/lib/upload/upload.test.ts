@@ -649,5 +649,10 @@ describe('Upload Engine Execution (worker.ts)', () => {
     await expect(uploadFile(file, 'primary', '')).rejects.toThrow(/HTTP 403: Forbidden/);
     expect(part2Started).toBe(true);
     expect(part2Aborted).toBe(true);
+
+    const item = uploadStore.items[0];
+    expect(item).toBeDefined();
+    expect(item.status).toBe('failed');
+    expect(item.error).toContain('HTTP 403: Forbidden');
   });
 });

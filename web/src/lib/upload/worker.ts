@@ -145,10 +145,15 @@ export async function uploadPartWithRetry(
   );
 }
 
+interface ActiveTransfer {
+  controller: AbortController;
+  userAborted: boolean;
+}
+
 /**
- * Active transfer AbortController registry keyed by store item ID.
+ * Active transfer registry keyed by store item ID.
  */
-const activeControllers = new Map<string, AbortController>();
+const activeControllers = new Map<string, ActiveTransfer>();
 
 /**
  * Cancels an active or queued transfer by its item ID.
@@ -156,10 +161,10 @@ const activeControllers = new Map<string, AbortController>();
  * removes IndexedDB session, and marks item as aborted in uploadStore.
  */
 export async function cancelUpload(id: string): Promise<void> {
-  const controller = activeControllers.get(id);
-  if (controller) {
-    controller.abort();
-    activeControllers.delete(id);
+  const entry = activeControllers.get(id);
+  if (entry) {
+    entry.userAborted = true;
+    entry.controller.abort();
   }
 
   const item = uploadStore.items.find((i) => i.id === id);
@@ -198,7 +203,7 @@ export async function uploadFile(
   });
 
   const controller = new AbortController();
-  activeControllers.set(item.id, controller);
+  activeControllers.set(item.id, { controller, userAborted: false });
   const startTime = Date.now();
 
   try {
@@ -284,7 +289,10 @@ export async function uploadFile(
     await bucketStore.refresh();
     return item;
   } catch (err) {
-    if (controller.signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+    const entry = activeControllers.get(item.id);
+    const isUserAborted = entry?.userAborted || false;
+
+    if (isUserAborted) {
       uploadStore.markAborted(item.id);
     } else {
       const msg = err instanceof Error ? err.message : String(err);
@@ -315,7 +323,7 @@ export async function resumeInterruptedUpload(
   }
 
   const controller = new AbortController();
-  activeControllers.set(item.id, controller);
+  activeControllers.set(item.id, { controller, userAborted: false });
   const startTime = Date.now();
 
   try {
@@ -366,7 +374,10 @@ export async function resumeInterruptedUpload(
     await bucketStore.refresh();
     return item;
   } catch (err) {
-    if (controller.signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+    const entry = activeControllers.get(item.id);
+    const isUserAborted = entry?.userAborted || false;
+
+    if (isUserAborted) {
       uploadStore.markAborted(item.id);
     } else {
       const msg = err instanceof Error ? err.message : String(err);
@@ -380,7 +391,7 @@ export async function resumeInterruptedUpload(
 
 /**
  * Uploads parts in parallel with a concurrency pool of up to MAX_CONCURRENCY.
- * If any part upload fails, aborts all sibling workers immediately.
+ * If any part upload fails, aborts all sibling workers immediately via internal pool controller.
  */
 async function executePartsPool(
   file: File | Blob,
@@ -392,10 +403,23 @@ async function executePartsPool(
   let currentIndex = 0;
   let poolError: unknown = null;
 
+  // Internal pool abort controller to cancel sibling workers without marking parent transfer as user aborted
+  const poolAbortController = new AbortController();
+
+  // Forward external parent abort (e.g. user cancellation) to the pool
+  const onParentAbort = () => {
+    poolAbortController.abort();
+  };
+  if (controller.signal.aborted) {
+    poolAbortController.abort();
+  } else {
+    controller.signal.addEventListener('abort', onParentAbort, { once: true });
+  }
+
   const workerCount = Math.min(MAX_CONCURRENCY, parts.length);
   const workers = Array.from({ length: workerCount }, async () => {
     while (currentIndex < parts.length && !poolError) {
-      if (controller.signal.aborted) {
+      if (poolAbortController.signal.aborted) {
         throw new DOMException('Upload aborted', 'AbortError');
       }
 
@@ -406,16 +430,20 @@ async function executePartsPool(
       const chunk = file.slice(start, end);
 
       try {
-        const etag = await uploadPartWithRetry(part.url, chunk, controller.signal);
+        const etag = await uploadPartWithRetry(part.url, chunk, poolAbortController.signal);
         await onPartComplete(part.part_number, etag, chunk.size);
       } catch (err) {
         poolError = err;
-        // Abort all in-flight sibling workers
-        controller.abort();
+        // Abort all in-flight sibling workers in this pool
+        poolAbortController.abort();
         throw err;
       }
     }
   });
 
-  await Promise.all(workers);
+  try {
+    await Promise.all(workers);
+  } finally {
+    controller.signal.removeEventListener('abort', onParentAbort);
+  }
 }
