@@ -405,28 +405,28 @@ git commit -m "feat(cli): implement core terminal commands ls, upload, download,
 **Interfaces:**
 - Produces: Axum server listening on configured port, exposing REST endpoints defined in Design Spec Section 5.
 
-- [ ] **Step 1: Write failing Axum integration test for Auth and Objects API**
+- [x] **Step 1: Write failing Axum integration test for Auth and Objects API**
 
 In `tests/api_test.rs`:
 Test login with valid password receives `Set-Cookie` header; test unauthenticated request to `/api/buckets` returns `401 Unauthorized`.
 
-- [ ] **Step 2: Implement `src/server/middleware.rs`**
+- [x] **Step 2: Implement `src/server/middleware.rs`**
 
 Validate cookie `r2drive_session` against `MetadataRepo::get_session` or check `Authorization: Bearer <ADMIN_PASSWORD>`.
 
-- [ ] **Step 3: Implement API routes**
+- [x] **Step 3: Implement API routes**
   - `routes/auth.rs`: `/api/auth/login`, `logout`, `me`.
   - `routes/buckets.rs`: `/api/buckets`.
   - `routes/objects.rs`: `/api/buckets/:profile/objects`, deletion, and forced re-sync.
   - `routes/transfers.rs`: `/api/buckets/:profile/upload/init`, `resume`, `complete`, `abort`, `download`.
   - Background task: Spawns 24-hour cleanup worker in `tokio::spawn` aborting stale sessions via `MetadataRepo::list_stale_multipart_sessions`.
 
-- [ ] **Step 4: Run tests and verify**
+- [x] **Step 4: Run tests and verify**
 
 Run: `cargo test --test api_test`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/server/ src/sync/ tests/api_test.rs
