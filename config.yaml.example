@@ -1,0 +1,46 @@
+# ==============================================================================
+# r2drive Configuration Template
+# ==============================================================================
+
+# Server configuration
+server:
+  # Host IP address to bind to (use 0.0.0.0 for containerized / public environments)
+  host: "0.0.0.0"
+  # Port number for HTTP / REST API and WebConsole server
+  port: 8080
+  # Admin password for WebConsole login and administrative API endpoints
+  admin_password: "change-me-in-production"
+  # JWT secret used for signing session tokens (leave unset or auto-generate)
+  jwt_secret: "auto-generated-random-string-or-custom"
+  # Session time-to-live in hours
+  session_ttl_hours: 72
+  # Headless mode: when true, disable serving embedded web console UI
+  headless: false
+
+# Database configuration
+database:
+  # Connection URL for metadata repository (supports sqlite:///... and postgres://...)
+  url: "sqlite:///data/r2drive.db?mode=rwc"
+
+# Synchronization configuration
+sync:
+  # Default cache TTL in seconds before querying R2 for fresh metadata
+  default_ttl_seconds: 60
+
+# Default profile name to use when no --profile flag is specified
+default_profile: "primary"
+
+# R2 Bucket profiles
+# Environment variable substitution (${VAR_NAME}) is supported across all fields
+profiles:
+  primary:
+    # Cloudflare account ID
+    account_id: "${R2_ACCOUNT_ID}"
+    # Cloudflare R2 Access Key ID
+    access_key_id: "${R2_ACCESS_KEY_ID}"
+    # Cloudflare R2 Secret Access Key
+    secret_access_key: "${R2_SECRET_ACCESS_KEY}"
+    # Cloudflare R2 Bucket name
+    bucket_name: "${R2_BUCKET_NAME}"
+    # Optional public URL / custom domain for direct downloads
+    public_url: "https://pub.example.com"
