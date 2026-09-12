@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+cd "$ROOT_DIR"
+
 echo "Running pre-push test checks..."
 cargo test --all-targets
 (cd web && pnpm test)
