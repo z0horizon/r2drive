@@ -6,9 +6,12 @@
   import Breadcrumbs from './components/layout/Breadcrumbs.svelte';
   import FileList from './components/explorer/FileList.svelte';
   import LoginModal from './components/modals/LoginModal.svelte';
+  import DropZone from './components/upload/DropZone.svelte';
+  import UploadModal from './components/upload/UploadModal.svelte';
   import { HardDrive, RefreshCw, Upload, AlertCircle } from 'lucide-svelte';
 
   let initialized = $state(false);
+  let dropZone: ReturnType<typeof DropZone> | null = $state(null);
 
   onMount(async () => {
     try {
@@ -24,6 +27,10 @@
   async function handleRefresh() {
     if (bucketStore.loading) return;
     await bucketStore.refresh();
+  }
+
+  function handleUploadClick() {
+    dropZone?.openPicker();
   }
 </script>
 
@@ -65,6 +72,9 @@
           </div>
         {/if}
 
+        <!-- Drag & Drop Overlay, Hidden Input & Resume Sessions Banner -->
+        <DropZone bind:this={dropZone} />
+
         <!-- Navigation Breadcrumbs & Actions Toolbar -->
         <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-slate-950/40 p-3 sm:p-4 rounded-xl border border-slate-800/80">
           <div class="min-w-0 flex-1 w-full sm:w-auto">
@@ -83,7 +93,8 @@
             </button>
             <button
               type="button"
-              class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm transition"
+              onclick={handleUploadClick}
+              class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm transition cursor-pointer"
             >
               <Upload class="w-3.5 h-3.5" />
               <span>Upload</span>
@@ -93,6 +104,9 @@
 
         <!-- Directory & File Explorer -->
         <FileList />
+
+        <!-- Floating Upload Manager Panel -->
+        <UploadModal />
       </main>
     {/if}
   </div>
