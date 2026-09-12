@@ -4,11 +4,11 @@
 
 **Goal:** Build and package Phase 1 (MVP) of `r2drive`: a dual-mode Rust binary (terminal CLI + Axum REST backend `StorageNode`), embedded SQLite `MetadataStore` with multi-database abstraction, embedded Svelte 5 `WebConsole`, direct-to-R2 resumable upload pipeline powered by `r2kit`, and a single all-in-one Docker image with `--headless` mode.
 
-**Architecture:** A unified Cargo crate structured into decoupled modules (`config`, `db`, `r2`, `server`, `cli`) consuming the local `r2kit` crate. `MetadataRepo` trait abstracts data access for SQLite (Phase 1) and PostgreSQL (Phase 2). Svelte 5 SPA in `web/` is compiled into static assets and embedded inside the Rust binary via `rust-embed`.
+**Architecture:** A unified Cargo crate structured into decoupled modules (`config`, `db`, `r2`, `server`, `cli`) consuming the `r2kit` crate from crates.io. `MetadataRepo` trait abstracts data access for SQLite (Phase 1) and PostgreSQL (Phase 2). Svelte 5 SPA in `web/` is compiled into static assets and embedded inside the Rust binary via `rust-embed`.
 
 **Tech Stack:** 
 - Backend: Rust 1.94+ (Tokio, Axum 0.8, SQLx 0.8 with SQLite & PostgreSQL, Clap 4, Serde, Serde_yaml, Thiserror, Tracing, Rust-embed)
-- R2 Client: `r2kit` (`path = "../r2kit"`)
+- R2 Client: `r2kit` (`0.2.0` from crates.io)
 - Frontend: Svelte 5 (Vite, TypeScript, Tailwind CSS, Lucide-Svelte)
 - Database: Embedded SQLite (`migrations/sqlite/`), ready for PostgreSQL (`migrations/postgres/`)
 - Packaging: Multi-stage Dockerfile (~45MB)
@@ -37,7 +37,7 @@
 
 - [ ] **Step 1: Write Cargo.toml with dependencies**
 
-Create `Cargo.toml` referencing `r2kit` at `../r2kit`:
+Create `Cargo.toml` referencing `r2kit = "0.2.0"`:
 ```toml
 [package]
 name = "r2drive"
@@ -46,7 +46,7 @@ edition = "2024"
 rust-version = "1.94.1"
 
 [dependencies]
-r2kit = { path = "../r2kit" }
+r2kit = "0.2.0"
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["macros"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
@@ -671,9 +671,6 @@ COPY Cargo.toml Cargo.lock* ./
 COPY src/ src/
 COPY migrations/ migrations/
 COPY --from=web-builder /app/web/dist/ web/dist/
-# Copy local r2kit crate
-COPY ../r2kit /r2kit
-RUN sed -i 's|path = "../r2kit"|path = "/r2kit"|g' Cargo.toml
 RUN cargo build --release
 
 # Stage 3: Minimal Runtime
