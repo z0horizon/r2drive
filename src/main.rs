@@ -1,5 +1,11 @@
-pub mod error;
+use clap::Parser;
+use r2drive::cli::Cli;
 
-fn main() {
-    println!("r2drive");
+#[tokio::main]
+async fn main() {
+    let cli = Cli::parse();
+    if let Err(err) = cli.execute().await {
+        eprintln!("Error: {err}");
+        std::process::exit(1);
+    }
 }
