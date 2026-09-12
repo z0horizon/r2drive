@@ -483,19 +483,19 @@ git commit -m "feat(web): scaffold Svelte 5 WebConsole with Vite and Tailwind CS
 **Interfaces:**
 - Produces: Typed API calls with auto-credentials, reactive Svelte 5 runes (`$state`) managing session, current prefix, and upload queue.
 
-- [ ] **Step 1: Write unit tests for format utilities (`formatBytes`, `formatDate`)**
+- [x] **Step 1: Write unit tests for format utilities (`formatBytes`, `formatDate`)**
 
-- [ ] **Step 2: Implement API clients in `web/src/lib/api/`**
+- [x] **Step 2: Implement API clients in `web/src/lib/api/`**
 
 Include: `login`, `logout`, `checkAuth`, `listObjects`, `deleteObject`, `initUpload`, `resumeUpload`, `completeUpload`, `abortUpload`.
 
-- [ ] **Step 3: Implement Svelte 5 Runes stores in `web/src/lib/stores/`**
+- [x] **Step 3: Implement Svelte 5 Runes stores in `web/src/lib/stores/`**
 
 `authStore`: tracks login status.  
 `bucketStore`: tracks active profile, current prefix, breadcrumb history.  
 `uploadStore`: reactive list of active, completed, and failed transfers.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add web/src/lib/api/ web/src/lib/stores/ web/src/lib/utils/
