@@ -70,6 +70,20 @@ export function calculateChunkPlan(fileSize: number, partSize: number = PART_SIZ
   return chunks;
 }
 
+export function formatUploadErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    if (err.name === 'AbortError' || err.message.includes('aborted')) {
+      return err.message;
+    }
+    if (err.message === 'Failed to fetch' || err.name === 'TypeError') {
+      const origin = typeof window !== 'undefined' ? window.location.origin : 'current origin';
+      return `Failed to fetch: Request blocked by CORS or network error. Ensure CORS is configured on your Cloudflare R2 bucket for ${origin}.`;
+    }
+    return err.message;
+  }
+  return String(err);
+}
+
 export async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -141,7 +155,7 @@ export async function uploadPartWithRetry(
   }
 
   throw new Error(
-    `Part upload failed after ${maxRetries} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`
+    `Part upload failed after ${maxRetries} attempts: ${formatUploadErrorMessage(lastError)}`
   );
 }
 
@@ -295,7 +309,7 @@ export async function uploadFile(
     if (isUserAborted) {
       uploadStore.markAborted(item.id);
     } else {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = formatUploadErrorMessage(err);
       uploadStore.markFailed(item.id, msg);
     }
     throw err;
@@ -380,7 +394,7 @@ export async function resumeInterruptedUpload(
     if (isUserAborted) {
       uploadStore.markAborted(item.id);
     } else {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = formatUploadErrorMessage(err);
       uploadStore.markFailed(item.id, msg);
     }
     throw err;
