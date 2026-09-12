@@ -596,7 +596,7 @@ git commit -m "feat(web): implement direct-to-R2 resumable upload engine with In
 **Interfaces:**
 - Produces: Binary that embeds `web/dist/` assets and serves them on non-API routes with SPA fallback, or disables asset serving when `--headless` is set.
 
-- [ ] **Step 1: Implement `assets.rs` with `rust-embed`**
+- [x] **Step 1: Implement `assets.rs` with `rust-embed`**
 
 ```rust
 use rust_embed::RustEmbed;
@@ -620,16 +620,16 @@ pub async fn static_handler(uri: Uri) -> Response {
 }
 ```
 
-- [ ] **Step 2: Write integration test verifying asset serving and headless flag**
+- [x] **Step 2: Write integration test verifying asset serving and headless flag**
 
 Verify requesting `/` returns HTML content when headless is false; verify requesting `/` returns 404/API-only when headless is true.
 
-- [ ] **Step 3: Run tests and verify**
+- [x] **Step 3: Run tests and verify**
 
 Run: `cargo test --test api_test`
 Expected: PASS
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/server/assets.rs src/server/mod.rs
