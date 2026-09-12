@@ -94,6 +94,8 @@ pub fn calculate_chunk_ranges(file_size: u64, part_size: u64) -> Result<Vec<Chun
     Ok(chunks)
 }
 
+use crate::r2::map_r2_error;
+
 /// Initiates a presigned multipart upload on R2 and generates presigned URLs
 /// for every part in the upload plan.
 pub async fn init_presigned_upload(
@@ -118,30 +120,29 @@ pub async fn init_presigned_upload_with_content_type(
 ) -> Result<PresignedUploadPlan, AppError> {
     let mut builder = bucket
         .presigned_multipart(key)
-        .map_err(|e| AppError::BadRequest(format!("Invalid object key '{key}': {e}")))?
+        .map_err(map_r2_error)?
         .file_size(file_size)
         .part_size(part_size);
 
-    if let Some(Ok(mime)) = content_type.map(|ct| ct.parse::<r2kit::mime::Mime>()) {
+    if let Some(ct) = content_type {
+        let mime = ct
+            .parse::<r2kit::mime::Mime>()
+            .map_err(|e| AppError::BadRequest(format!("Invalid content_type '{ct}': {e}")))?;
         builder = builder.content_type(mime);
     }
 
-    let session = builder
-        .create()
-        .await
-        .map_err(|e| AppError::R2(format!("Failed to initiate multipart upload: {e}")))?;
+    let session = builder.create().await.map_err(map_r2_error)?;
 
     let upload_id = session.snapshot().expose_upload_id().to_string();
     let part_count = session.part_count();
     let mut parts = Vec::with_capacity(part_count as usize);
 
     for part_num in 1..=part_count {
-        let number = r2kit::PartNumber::try_from(part_num)
-            .map_err(|e| AppError::BadRequest(format!("Invalid part number {part_num}: {e}")))?;
+        let number = r2kit::PartNumber::try_from(part_num).map_err(map_r2_error)?;
         let presigned = session
             .presign_part(number, expires_in)
             .await
-            .map_err(|e| AppError::R2(format!("Failed to presign part {part_num}: {e}")))?;
+            .map_err(map_r2_error)?;
 
         parts.push(PresignedPart {
             part_number: part_num,
@@ -175,14 +176,17 @@ pub async fn init_single_presigned_upload_with_content_type(
     content_type: Option<&str>,
 ) -> Result<String, AppError> {
     let mut options = r2kit::ObjectUploadOptions::default();
-    if let Some(Ok(mime)) = content_type.map(|ct| ct.parse::<r2kit::mime::Mime>()) {
+    if let Some(ct) = content_type {
+        let mime = ct
+            .parse::<r2kit::mime::Mime>()
+            .map_err(|e| AppError::BadRequest(format!("Invalid content_type '{ct}': {e}")))?;
         options = options.with_content_type(mime);
     }
 
     let presigned = bucket
         .presign_put_with_options(key, file_size, expires_in, options)
         .await
-        .map_err(|e| AppError::R2(format!("Failed to presign single PUT upload: {e}")))?;
+        .map_err(map_r2_error)?;
 
     Ok(presigned.into_request().url().expose().to_string())
 }
@@ -203,24 +207,20 @@ pub async fn complete_multipart_upload(
         file_size,
         part_size,
     )
-    .map_err(|e| AppError::BadRequest(format!("Invalid multipart snapshot parameters: {e}")))?;
+    .map_err(map_r2_error)?;
 
     let session = bucket
         .resume_presigned_multipart(snapshot)
-        .map_err(|e| AppError::R2(format!("Failed to resume multipart session: {e}")))?;
+        .map_err(map_r2_error)?;
 
     let receipts: Vec<r2kit::MultipartPartReceipt> = parts
         .into_iter()
         .map(|(num, etag)| r2kit::MultipartPartReceipt::new(num, etag))
         .collect();
 
-    let manifest = r2kit::CompletionManifest::try_from_receipts(receipts)
-        .map_err(|e| AppError::BadRequest(format!("Invalid completion parts: {e}")))?;
+    let manifest = r2kit::CompletionManifest::try_from_receipts(receipts).map_err(map_r2_error)?;
 
-    let completed = session
-        .complete(manifest)
-        .await
-        .map_err(|e| AppError::R2(format!("Failed to complete multipart upload: {e}")))?;
+    let completed = session.complete(manifest).await.map_err(map_r2_error)?;
 
     Ok(completed.etag().unwrap_or_default().to_string())
 }
@@ -242,16 +242,13 @@ pub async fn resume_multipart_upload(
         file_size,
         part_size,
     )
-    .map_err(|e| AppError::BadRequest(format!("Invalid multipart snapshot parameters: {e}")))?;
+    .map_err(map_r2_error)?;
 
     let session = bucket
         .resume_presigned_multipart(snapshot)
-        .map_err(|e| AppError::R2(format!("Failed to resume multipart session: {e}")))?;
+        .map_err(map_r2_error)?;
 
-    let reconciliation = session
-        .reconcile()
-        .await
-        .map_err(|e| AppError::R2(format!("Failed to reconcile multipart upload: {e}")))?;
+    let reconciliation = session.reconcile().await.map_err(map_r2_error)?;
 
     let completed_parts: Vec<CompletedPartReceipt> = reconciliation
         .uploaded_parts()
@@ -266,7 +263,7 @@ pub async fn resume_multipart_upload(
         let presigned = session
             .presign_part(missing, expires_in)
             .await
-            .map_err(|e| AppError::R2(format!("Failed to presign part: {e}")))?;
+            .map_err(map_r2_error)?;
 
         remaining_parts.push(PresignedPart {
             part_number: missing.get(),
@@ -296,22 +293,20 @@ pub async fn abort_multipart_upload(
         file_size,
         part_size,
     )
-    .map_err(|e| AppError::BadRequest(format!("Invalid multipart snapshot parameters: {e}")))?;
+    .map_err(map_r2_error)?;
 
     let session = bucket
         .resume_presigned_multipart(snapshot)
-        .map_err(|e| AppError::R2(format!("Failed to resume multipart session: {e}")))?;
+        .map_err(map_r2_error)?;
 
-    session
-        .abort()
-        .await
-        .map_err(|e| AppError::R2(format!("Failed to abort multipart upload: {e}")))?;
+    session.abort().await.map_err(map_r2_error)?;
 
     Ok(())
 }
 
 /// Generates a download URL for an object key. If `custom_public_url` is provided,
-/// formats the public domain URL directly. Otherwise, signs a presigned GET request on R2.
+/// formats the public domain URL directly with proper percent encoding of path segments.
+/// Otherwise, signs an authenticated presigned GET request on R2.
 pub async fn generate_download_url(
     bucket: &r2kit::Bucket,
     key: &str,
@@ -319,14 +314,34 @@ pub async fn generate_download_url(
     custom_public_url: Option<&str>,
 ) -> Result<String, AppError> {
     if let Some(base) = custom_public_url.filter(|s| !s.trim().is_empty()) {
-        let base_trimmed = base.trim_end_matches('/');
-        let key_trimmed = key.trim_start_matches('/');
-        Ok(format!("{base_trimmed}/{key_trimmed}"))
+        let base_trimmed = base.trim();
+        let base_with_scheme =
+            if base_trimmed.starts_with("http://") || base_trimmed.starts_with("https://") {
+                base_trimmed.to_string()
+            } else {
+                format!("https://{base_trimmed}")
+            };
+
+        let mut parsed = url::Url::parse(&base_with_scheme).map_err(|e| {
+            AppError::BadRequest(format!("Invalid custom_public_url '{base}': {e}"))
+        })?;
+
+        let key_clean = key.trim_start_matches('/');
+        if !key_clean.is_empty() {
+            let mut segments = parsed.path_segments_mut().map_err(|_| {
+                AppError::BadRequest(format!("Cannot format path segments for URL: '{base}'"))
+            })?;
+            segments.pop_if_empty();
+            for segment in key_clean.split('/') {
+                segments.push(segment);
+            }
+        }
+        Ok(parsed.to_string())
     } else {
         let presigned = bucket
             .presign_get(key, expires_in)
             .await
-            .map_err(|e| AppError::R2(format!("Failed to generate download URL: {e}")))?;
+            .map_err(map_r2_error)?;
         Ok(presigned.url().expose().to_string())
     }
 }
@@ -610,5 +625,92 @@ mod tests {
 
         let from_tuple: CompletedPartReceipt = tuple.into();
         assert_eq!(from_tuple, receipt);
+    }
+
+    #[tokio::test]
+    async fn test_generate_download_url_custom_public_url_percent_encoding() {
+        let bucket = test_bucket();
+
+        // Spaces and special characters in key
+        let url = generate_download_url(
+            &bucket,
+            "photos/summer vacation 2026/my beach & sun [1] #cool?.jpg",
+            Duration::from_secs(3600),
+            Some("https://cdn.example.com/assets"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            url,
+            "https://cdn.example.com/assets/photos/summer%20vacation%202026/my%20beach%20&%20sun%20[1]%20%23cool%3F.jpg"
+        );
+
+        // Host without scheme
+        let url2 = generate_download_url(
+            &bucket,
+            "folder with space/file.txt",
+            Duration::from_secs(3600),
+            Some("cdn.example.com"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            url2,
+            "https://cdn.example.com/folder%20with%20space/file.txt"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_malformed_content_type_rejected() {
+        let bucket = test_bucket();
+
+        // Single upload with invalid MIME
+        let err_single = init_single_presigned_upload_with_content_type(
+            &bucket,
+            "test.txt",
+            100,
+            Duration::from_secs(3600),
+            Some("not a valid mime format @@!!"),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err_single, AppError::BadRequest(_)));
+        assert!(err_single.to_string().contains("Invalid content_type"));
+
+        // Multipart upload with invalid MIME
+        let err_multi = init_presigned_upload_with_content_type(
+            &bucket,
+            "large.bin",
+            10 * MB,
+            10 * MB,
+            Duration::from_secs(3600),
+            Some("invalid-mime"),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err_multi, AppError::BadRequest(_)));
+        assert!(err_multi.to_string().contains("Invalid content_type"));
+    }
+
+    #[tokio::test]
+    async fn test_valid_content_type_single_upload() {
+        let bucket = test_bucket();
+        let url = init_single_presigned_upload_with_content_type(
+            &bucket,
+            "image.png",
+            1024,
+            Duration::from_secs(3600),
+            Some("image/png"),
+        )
+        .await
+        .unwrap();
+
+        assert!(url.contains("test-bucket"));
+        assert!(url.contains("/image.png"));
+        assert!(url.contains("X-Amz-Signature="));
     }
 }

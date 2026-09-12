@@ -42,6 +42,34 @@ impl IntoResponse for AppError {
     }
 }
 
+impl From<r2kit::ConfigError> for AppError {
+    fn from(err: r2kit::ConfigError) -> Self {
+        AppError::Config(err.to_string())
+    }
+}
+
+impl From<r2kit::Error> for AppError {
+    fn from(err: r2kit::Error) -> Self {
+        match err {
+            r2kit::Error::Validation(e) => AppError::BadRequest(e.to_string()),
+            r2kit::Error::InvalidInput { field, reason } => {
+                AppError::BadRequest(format!("Invalid input for {field}: {reason}"))
+            }
+            r2kit::Error::NotFound => AppError::NotFound("Remote resource not found".to_string()),
+            r2kit::Error::Remote(ref se) if se.kind() == r2kit::ServiceErrorKind::NotFound => {
+                AppError::NotFound(se.to_string())
+            }
+            r2kit::Error::Remote(ref se)
+                if se.kind() == r2kit::ServiceErrorKind::Authentication =>
+            {
+                AppError::Auth(se.to_string())
+            }
+            r2kit::Error::Config(ce) => AppError::Config(ce.to_string()),
+            other => AppError::R2(other.to_string()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,5 +126,51 @@ mod tests {
         let err = AppError::Migration(sqlx::migrate::MigrateError::VersionMissing(1));
         let res = err.into_response();
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_r2kit_validation_error_mapping() {
+        let r2_err = r2kit::Error::Validation(r2kit::ValidationError::MultipartFileSizeZero);
+        let app_err: AppError = r2_err.into();
+        assert!(matches!(app_err, AppError::BadRequest(_)));
+        assert_eq!(app_err.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn test_r2kit_invalid_input_error_mapping() {
+        let r2_err = r2kit::Error::InvalidInput {
+            field: "key",
+            reason: "must not be empty",
+        };
+        let app_err: AppError = r2_err.into();
+        assert!(matches!(app_err, AppError::BadRequest(_)));
+        assert_eq!(app_err.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn test_r2kit_not_found_error_mapping() {
+        let r2_err = r2kit::Error::NotFound;
+        let app_err: AppError = r2_err.into();
+        assert!(matches!(app_err, AppError::NotFound(_)));
+        assert_eq!(app_err.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn test_r2kit_config_error_mapping() {
+        let cfg_err = r2kit::ConfigError::InvalidAccountId;
+        let app_err: AppError = cfg_err.into();
+        assert!(matches!(app_err, AppError::Config(_)));
+        assert_eq!(
+            app_err.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn test_r2kit_presign_error_mapping() {
+        let r2_err = r2kit::Error::Presign;
+        let app_err: AppError = r2_err.into();
+        assert!(matches!(app_err, AppError::R2(_)));
+        assert_eq!(app_err.into_response().status(), StatusCode::BAD_GATEWAY);
     }
 }

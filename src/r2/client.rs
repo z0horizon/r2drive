@@ -52,12 +52,9 @@ impl R2Manager {
                 })?;
 
             let client = r2kit::R2Client::new(r2_config);
-            let bucket = client.bucket(&profile.bucket_name).map_err(|e| {
-                AppError::Config(format!(
-                    "Failed to resolve bucket '{}' for profile '{name}': {e}",
-                    profile.bucket_name
-                ))
-            })?;
+            let bucket = client
+                .bucket(&profile.bucket_name)
+                .map_err(crate::r2::map_r2_error)?;
 
             clients.insert(name.clone(), client);
             buckets.insert(name.clone(), bucket);
@@ -69,6 +66,16 @@ impl R2Manager {
             buckets,
             default_profile,
         })
+    }
+
+    /// Verifies that the bucket exists and credentials can access it, mapping errors cleanly.
+    pub async fn validate_bucket(&self, profile_name: &str) -> Result<(), AppError> {
+        let bucket = self.get_bucket(profile_name)?;
+        bucket
+            .validate_access()
+            .await
+            .map_err(crate::r2::map_r2_error)?;
+        Ok(())
     }
 
     /// Get a handle to the `r2kit::Bucket` for a named profile.
@@ -213,7 +220,7 @@ mod tests {
 
         let result = R2Manager::new(&config);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), AppError::Config(_)));
+        assert!(matches!(result.unwrap_err(), AppError::BadRequest(_)));
     }
 
     #[test]
