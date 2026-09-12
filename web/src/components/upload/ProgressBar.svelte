@@ -18,7 +18,7 @@
     error?: string;
   } = $props();
 
-  let barColor = $derived(() => {
+  let barColor = $derived.by(() => {
     switch (status) {
       case 'completed':
         return 'bg-emerald-500';
@@ -33,7 +33,7 @@
     }
   });
 
-  let statusText = $derived(() => {
+  let statusText = $derived.by(() => {
     switch (status) {
       case 'completed':
         return 'Completed';
@@ -64,7 +64,7 @@
       }`}
       title={error || ''}
     >
-      {statusText()}
+      {statusText}
     </span>
 
     <div class="flex items-center space-x-2 text-right shrink-0">
@@ -82,7 +82,7 @@
   <!-- Progress Bar Track -->
   <div class="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
     <div
-      class={`h-full rounded-full transition-all duration-300 ease-out ${barColor()}`}
+      class={`h-full rounded-full transition-all duration-300 ease-out ${barColor}`}
       style={`width: ${Math.min(100, Math.max(0, progress))}%`}
     ></div>
   </div>

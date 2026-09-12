@@ -26,6 +26,7 @@
   let isDragging = $state(false);
   let dragCounter = 0;
   let pendingSessions = $state<UploadManifest[]>([]);
+  let activeResumeTarget = $state<UploadManifest | null>(null);
 
   // Pending resume prompt when a dropped or selected file matches an existing session
   interface ResumePrompt {
@@ -42,6 +43,11 @@
       fileInput.value = '';
       fileInput.click();
     }
+  }
+
+  function selectFileToResume(session: UploadManifest): void {
+    activeResumeTarget = session;
+    openPicker();
   }
 
   async function loadPendingSessions(): Promise<void> {
@@ -127,10 +133,35 @@
     // Refresh pending sessions to ensure up-to-date manifest list
     await loadPendingSessions();
 
-    for (const file of files) {
+    const filesToProcess = [...files];
+
+    // If user clicked "Select file to resume" for a specific unfinished session in the banner
+    if (activeResumeTarget) {
+      const target = activeResumeTarget;
+      activeResumeTarget = null;
+
+      const expectedName = target.key.split('/').pop() || target.key;
+      const matchedIdx = filesToProcess.findIndex(
+        (f) => (f.name === expectedName || f.name === target.key) && f.size === target.fileSize
+      );
+
+      if (matchedIdx >= 0) {
+        const matchedFile = filesToProcess[matchedIdx];
+        filesToProcess.splice(matchedIdx, 1);
+        activeResumePrompts = [
+          ...activeResumePrompts.filter((p) => p.session.uploadId !== target.uploadId),
+          { file: matchedFile, session: target },
+        ];
+      }
+    }
+
+    for (const file of filesToProcess) {
       const targetKey = cleanObjectKey(prefix, file.name);
       const matchingSession = pendingSessions.find(
-        (s) => s.profile === profile && s.key === targetKey && s.fileSize === file.size
+        (s) =>
+          s.profile === profile &&
+          (s.key === targetKey || s.key.split('/').pop() === file.name) &&
+          s.fileSize === file.size
       );
 
       if (matchingSession) {
@@ -312,7 +343,7 @@
                 <div class="flex items-center space-x-2 shrink-0">
                   <button
                     type="button"
-                    onclick={openPicker}
+                    onclick={() => selectFileToResume(session)}
                     class="px-2 py-1 rounded bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-500/40 transition text-[10px] font-sans"
                   >
                     Select file to resume

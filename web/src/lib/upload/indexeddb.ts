@@ -150,25 +150,63 @@ export async function deleteSession(uploadId: string): Promise<void> {
   });
 }
 
-/**
- * Appends or updates a completed part in the persisted session manifest.
- */
-export async function addCompletedPart(
+// In-memory sequential queue per uploadId to serialize concurrent part writes
+const partUpdateQueues = new Map<string, Promise<void>>();
+
+async function atomicAddCompletedPart(
   uploadId: string,
   part: { part_number: number; etag: string }
 ): Promise<void> {
-  const session = await getSession(uploadId);
-  if (!session) return;
+  const db = await openDB();
+  if (!db) return;
 
-  const existingIdx = session.completedParts.findIndex(
-    (p) => p.part_number === part.part_number
-  );
-  if (existingIdx >= 0) {
-    session.completedParts[existingIdx] = part;
-  } else {
-    session.completedParts.push(part);
-  }
-  session.completedParts.sort((a, b) => a.part_number - b.part_number);
+  return new Promise((resolve, reject) => {
+    try {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+      const getReq = store.get(uploadId);
 
-  await saveSession(session);
+      getReq.onsuccess = () => {
+        const session = getReq.result as UploadManifest | undefined;
+        if (!session) {
+          resolve();
+          return;
+        }
+
+        const existingIdx = session.completedParts.findIndex(
+          (p) => p.part_number === part.part_number
+        );
+        if (existingIdx >= 0) {
+          session.completedParts[existingIdx] = part;
+        } else {
+          session.completedParts.push(part);
+        }
+        session.completedParts.sort((a, b) => a.part_number - b.part_number);
+
+        const putReq = store.put(session);
+        putReq.onsuccess = () => resolve();
+        putReq.onerror = () => reject(putReq.error || new Error('Failed to update session part in IndexedDB'));
+      };
+
+      getReq.onerror = () => reject(getReq.error || new Error('Failed to read session for part update'));
+      tx.onerror = () => reject(tx.error || new Error('Transaction failed during part update'));
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+/**
+ * Appends or updates a completed part in the persisted session manifest atomically.
+ */
+export function addCompletedPart(
+  uploadId: string,
+  part: { part_number: number; etag: string }
+): Promise<void> {
+  const prev = partUpdateQueues.get(uploadId) || Promise.resolve();
+  const next = prev
+    .catch(() => {})
+    .then(() => atomicAddCompletedPart(uploadId, part));
+  partUpdateQueues.set(uploadId, next);
+  return next;
 }

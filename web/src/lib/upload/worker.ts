@@ -99,13 +99,35 @@ export async function uploadPartWithRetry(
       });
 
       if (res.ok) {
-        const etag = res.headers.get('ETag') || res.headers.get('etag') || '';
+        const rawEtag = res.headers.get('ETag') || res.headers.get('etag');
+        const etag = rawEtag ? rawEtag.trim() : '';
+        if (!etag) {
+          throw new Error(
+            'Upload response missing ETag header. Verify R2 CORS ExposeHeaders includes ETag'
+          );
+        }
         return etag;
+      }
+
+      // Do not retry permanent 4xx errors (e.g. 400, 403, 404, 405) - only retry 5xx or network errors (plus 408/429)
+      if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
+        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
       }
 
       lastError = new Error(`HTTP ${res.status}: ${res.statusText}`);
     } catch (err) {
       if (signal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+        throw err;
+      }
+      // Fail immediately on missing ETag or non-retryable 4xx
+      if (
+        err instanceof Error &&
+        (err.message.includes('missing ETag header') ||
+          err.message.startsWith('HTTP 400:') ||
+          err.message.startsWith('HTTP 403:') ||
+          err.message.startsWith('HTTP 404:') ||
+          err.message.startsWith('HTTP 405:'))
+      ) {
         throw err;
       }
       lastError = err;
@@ -240,7 +262,7 @@ export async function uploadFile(
       file,
       initRes.parts,
       partSize,
-      controller.signal,
+      controller,
       async (partNum, etag, chunkSize) => {
         completedParts.push({ part_number: partNum, etag });
         await addCompletedPart(initRes.upload_id, { part_number: partNum, etag });
@@ -307,6 +329,7 @@ export async function resumeInterruptedUpload(
       const end = Math.min(manifest.fileSize, start + manifest.partSize);
       uploadedBytes += Math.max(0, end - start);
     }
+    const initialUploadedBytes = uploadedBytes;
 
     const initialProgress = Math.min(99, Math.round((uploadedBytes / manifest.fileSize) * 100));
     uploadStore.updateProgress(item.id, initialProgress, 0, uploadedBytes);
@@ -316,7 +339,7 @@ export async function resumeInterruptedUpload(
         file,
         resumeRes.remaining_parts,
         manifest.partSize,
-        controller.signal,
+        controller,
         async (partNum, etag, chunkSize) => {
           completedParts.push({ part_number: partNum, etag });
           await addCompletedPart(manifest.uploadId, { part_number: partNum, etag });
@@ -324,7 +347,8 @@ export async function resumeInterruptedUpload(
           uploadedBytes += chunkSize;
           const progress = Math.min(99, Math.round((uploadedBytes / manifest.fileSize) * 100));
           const elapsedSec = Math.max(0.1, (Date.now() - startTime) / 1000);
-          const speed = Math.round(uploadedBytes / elapsedSec);
+          const bytesTransferredThisSession = uploadedBytes - initialUploadedBytes;
+          const speed = Math.round(bytesTransferredThisSession / elapsedSec);
           uploadStore.updateProgress(item.id, progress, speed, uploadedBytes);
         }
       );
@@ -334,6 +358,10 @@ export async function resumeInterruptedUpload(
     await completeUpload(manifest.profile, manifest.uploadId, completedParts, manifest.key);
 
     await deleteSession(manifest.uploadId);
+    const elapsedSec = Math.max(0.1, (Date.now() - startTime) / 1000);
+    const finalBytesThisSession = manifest.fileSize - initialUploadedBytes;
+    const finalSpeed = Math.round(finalBytesThisSession / elapsedSec);
+    uploadStore.updateProgress(item.id, 100, finalSpeed, manifest.fileSize);
     uploadStore.markComplete(item.id);
     await bucketStore.refresh();
     return item;
@@ -352,12 +380,13 @@ export async function resumeInterruptedUpload(
 
 /**
  * Uploads parts in parallel with a concurrency pool of up to MAX_CONCURRENCY.
+ * If any part upload fails, aborts all sibling workers immediately.
  */
 async function executePartsPool(
   file: File | Blob,
   parts: PresignedPart[],
   partSize: number,
-  signal: AbortSignal,
+  controller: AbortController,
   onPartComplete: (partNumber: number, etag: string, chunkSize: number) => Promise<void>
 ): Promise<void> {
   let currentIndex = 0;
@@ -366,7 +395,7 @@ async function executePartsPool(
   const workerCount = Math.min(MAX_CONCURRENCY, parts.length);
   const workers = Array.from({ length: workerCount }, async () => {
     while (currentIndex < parts.length && !poolError) {
-      if (signal.aborted) {
+      if (controller.signal.aborted) {
         throw new DOMException('Upload aborted', 'AbortError');
       }
 
@@ -377,10 +406,12 @@ async function executePartsPool(
       const chunk = file.slice(start, end);
 
       try {
-        const etag = await uploadPartWithRetry(part.url, chunk, signal);
+        const etag = await uploadPartWithRetry(part.url, chunk, controller.signal);
         await onPartComplete(part.part_number, etag, chunk.size);
       } catch (err) {
         poolError = err;
+        // Abort all in-flight sibling workers
+        controller.abort();
         throw err;
       }
     }

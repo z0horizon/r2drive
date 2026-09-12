@@ -221,6 +221,35 @@ describe('Upload Part Retry and Backoff (uploadPartWithRetry)', () => {
       uploadPartWithRetry('https://r2.example.com/part1', blob, controller.signal, 5, 10)
     ).rejects.toThrow(/aborted/i);
   });
+
+  it('throws immediately without retrying when ETag header is missing or empty', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(null, {
+        status: 200,
+        headers: {}, // No ETag header
+      })
+    );
+
+    const blob = new Blob(['data']);
+    await expect(
+      uploadPartWithRetry('https://r2.example.com/part1', blob, undefined, 5, 10)
+    ).rejects.toThrow(/Upload response missing ETag header/);
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws immediately on permanent 400 or 403 error without retrying', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response('Access Denied', { status: 403, statusText: 'Forbidden' })
+    );
+
+    const blob = new Blob(['data']);
+    await expect(
+      uploadPartWithRetry('https://r2.example.com/part1', blob, undefined, 5, 10)
+    ).rejects.toThrow(/HTTP 403: Forbidden/);
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('IndexedDB Persistence Fallback & Mock (indexeddb.ts)', () => {
@@ -308,11 +337,15 @@ describe('IndexedDB Persistence Fallback & Mock (indexeddb.ts)', () => {
       expect(retrieved?.uploadId).toBe('test-upload-uuid');
       expect(retrieved?.completedParts).toHaveLength(1);
 
-      // Add completed part
-      await addCompletedPart('test-upload-uuid', { part_number: 2, etag: '"part2"' });
+      // Add completed part concurrently
+      await Promise.all([
+        addCompletedPart('test-upload-uuid', { part_number: 3, etag: '"part3"' }),
+        addCompletedPart('test-upload-uuid', { part_number: 4, etag: '"part4"' }),
+        addCompletedPart('test-upload-uuid', { part_number: 2, etag: '"part2"' }),
+      ]);
       const updated = await getSession('test-upload-uuid');
-      expect(updated?.completedParts).toHaveLength(2);
-      expect(updated?.completedParts[1]).toEqual({ part_number: 2, etag: '"part2"' });
+      expect(updated?.completedParts).toHaveLength(4);
+      expect(updated?.completedParts.map((p) => p.part_number)).toEqual([1, 2, 3, 4]);
 
       // List sessions
       const all = await listSessions();
@@ -565,5 +598,56 @@ describe('Upload Engine Execution (worker.ts)', () => {
       { part_number: 3, etag: '"etag-part-3"' },
     ]);
     expect(refreshSpy).toHaveBeenCalled();
+  });
+
+  it('aborts sibling workers when a chunk upload encounters fatal failure', async () => {
+    const fileSize = 25 * 1024 * 1024; // 25MB -> 3 parts
+    const file = new File([new Blob([new Uint8Array(fileSize)])], 'fail-fast.bin');
+
+    let part2Started = false;
+    let part2Aborted = false;
+
+    globalThis.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes('/upload/init')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              mode: 'multipart',
+              upload_id: 'up-fail-fast',
+              part_size: PART_SIZE,
+              parts: [
+                { part_number: 1, url: 'https://r2.presigned/part-1' },
+                { part_number: 2, url: 'https://r2.presigned/part-2' },
+                { part_number: 3, url: 'https://r2.presigned/part-3' },
+              ],
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+        );
+      }
+
+      if (url.includes('/part-1')) {
+        // Immediate fatal 403 Forbidden
+        return Promise.resolve(
+          new Response('Forbidden', { status: 403, statusText: 'Forbidden' })
+        );
+      }
+
+      if (url.includes('/part-2')) {
+        part2Started = true;
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            part2Aborted = true;
+            reject(new DOMException('Aborted', 'AbortError'));
+          });
+        });
+      }
+
+      return Promise.reject(new Error(`Unexpected URL: ${url}`));
+    });
+
+    await expect(uploadFile(file, 'primary', '')).rejects.toThrow(/HTTP 403: Forbidden/);
+    expect(part2Started).toBe(true);
+    expect(part2Aborted).toBe(true);
   });
 });
