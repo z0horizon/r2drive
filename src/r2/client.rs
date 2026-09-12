@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use crate::config::{BucketProfile, Config};
 use crate::error::AppError;
+use std::collections::HashMap;
 
 /// Multi-bucket client pool managing `r2kit::R2Client` and `r2kit::Bucket` instances
 /// for configured Cloudflare R2 bucket profiles.

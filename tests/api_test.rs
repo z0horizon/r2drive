@@ -146,7 +146,7 @@ async fn test_login_valid_password_sets_cookie_and_returns_session() {
         .expect("r2drive_session cookie present");
 
     // Verify session stored in DB
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());
     let token_hash = format!("{:x}", hasher.finalize());

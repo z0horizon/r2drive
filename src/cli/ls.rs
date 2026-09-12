@@ -52,9 +52,9 @@ pub async fn list_items(
 
         // Concrete objects
         for obj in page.objects() {
-            let last_modified = obj.last_modified().map(|t| {
-                chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
-            });
+            let last_modified = obj
+                .last_modified()
+                .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339());
             items.push(LsItem {
                 key: obj.key().to_string(),
                 size: obj.size(),

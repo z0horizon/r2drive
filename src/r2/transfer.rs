@@ -1,6 +1,6 @@
-use std::time::Duration;
-use serde::{Deserialize, Serialize};
 use crate::error::AppError;
+use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 pub const MIN_PART_SIZE: u64 = 5 * 1024 * 1024; // 5MB
 pub const DEFAULT_PART_SIZE: u64 = 10 * 1024 * 1024; // 10MB
@@ -485,14 +485,10 @@ mod tests {
     #[tokio::test]
     async fn test_generate_download_url_presigned_r2() {
         let bucket = test_bucket();
-        let url = generate_download_url(
-            &bucket,
-            "private/data.csv",
-            Duration::from_secs(3600),
-            None,
-        )
-        .await
-        .unwrap();
+        let url =
+            generate_download_url(&bucket, "private/data.csv", Duration::from_secs(3600), None)
+                .await
+                .unwrap();
 
         assert!(url.contains("test-bucket"));
         assert!(url.contains("/private/data.csv"));
@@ -586,10 +582,7 @@ mod tests {
             "mock-upload-id",
             20 * MB,
             10 * MB,
-            vec![
-                (1, "\"etag1\"".to_string()),
-                (1, "\"etag2\"".to_string()),
-            ],
+            vec![(1, "\"etag1\"".to_string()), (1, "\"etag2\"".to_string())],
         )
         .await
         .unwrap_err();
@@ -601,15 +594,9 @@ mod tests {
     async fn test_abort_multipart_invalid_snapshot_params() {
         let bucket = test_bucket();
         // Empty upload_id is invalid
-        let err = abort_multipart_upload(
-            &bucket,
-            "large.bin",
-            "",
-            10 * MB,
-            10 * MB,
-        )
-        .await
-        .unwrap_err();
+        let err = abort_multipart_upload(&bucket, "large.bin", "", 10 * MB, 10 * MB)
+            .await
+            .unwrap_err();
 
         assert!(matches!(err, AppError::BadRequest(_)));
     }

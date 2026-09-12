@@ -1,8 +1,8 @@
+use axum::Json;
 use axum::http::{Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
-use serde_json::json;
 use rust_embed::RustEmbed;
+use serde_json::json;
 
 #[derive(RustEmbed)]
 #[folder = "web/dist/"]
@@ -13,7 +13,11 @@ pub async fn static_handler(method: Method, uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
 
     if path.starts_with("api/") || path == "api" {
-        return (StatusCode::NOT_FOUND, Json(json!({ "error": "API endpoint not found" }))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "API endpoint not found" })),
+        )
+            .into_response();
     }
 
     if method != Method::GET && method != Method::HEAD {

@@ -17,7 +17,10 @@ pub struct SnapshotData {
 /// `~/.cache/r2drive/uploads/`
 pub fn get_cache_dir() -> PathBuf {
     if let Some(home) = std::env::var("HOME").ok().filter(|h| !h.trim().is_empty()) {
-        PathBuf::from(home).join(".cache").join("r2drive").join("uploads")
+        PathBuf::from(home)
+            .join(".cache")
+            .join("r2drive")
+            .join("uploads")
     } else {
         PathBuf::from(".cache").join("r2drive").join("uploads")
     }
@@ -34,12 +37,24 @@ pub fn snapshot_path_for(bucket_name: &str, key: &str) -> PathBuf {
     // Sanitize and limit prefix to at most 60 chars to avoid ENAMETOOLONG
     let sanitized_key: String = key
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .take(60)
         .collect();
     let sanitized_bucket: String = bucket_name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .take(30)
         .collect();
 
@@ -48,7 +63,9 @@ pub fn snapshot_path_for(bucket_name: &str, key: &str) -> PathBuf {
 }
 
 /// Saves a snapshot to disk in `~/.cache/r2drive/uploads/<hash_or_name>.json`.
-pub async fn save_snapshot(snapshot: &r2kit::MultipartSessionSnapshot) -> Result<PathBuf, AppError> {
+pub async fn save_snapshot(
+    snapshot: &r2kit::MultipartSessionSnapshot,
+) -> Result<PathBuf, AppError> {
     let dir = get_cache_dir();
     tokio::fs::create_dir_all(&dir).await?;
 
@@ -150,7 +167,9 @@ pub async fn execute(
     let cancel_handle = cancellation.clone();
     let ctrl_c_task = tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
-            eprintln!("\nReceived interruption signal (Ctrl+C). Aborting transfer and preserving snapshot...");
+            eprintln!(
+                "\nReceived interruption signal (Ctrl+C). Aborting transfer and preserving snapshot..."
+            );
             cancel_handle.cancel();
         }
     });
