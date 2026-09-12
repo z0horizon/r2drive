@@ -1,3 +1,4 @@
+pub mod assets;
 pub mod middleware;
 pub mod routes;
 pub mod state;
@@ -69,11 +70,26 @@ pub fn create_router(state: AppState) -> Router {
         ])
         .allow_credentials(true);
 
-    Router::new()
+    let router = Router::new()
         .merge(public_routes)
         .merge(protected_routes)
-        .layer(cors)
-        .with_state(state)
+        .layer(cors);
+
+    let router = if !state.config.server.headless {
+        router.fallback(assets::static_handler)
+    } else {
+        router.fallback(headless_fallback)
+    };
+
+    router.with_state(state)
+}
+
+/// Fallback handler when WebConsole is disabled in headless mode.
+async fn headless_fallback() -> (axum::http::StatusCode, &'static str) {
+    (
+        axum::http::StatusCode::NOT_FOUND,
+        "WebConsole disabled in headless mode",
+    )
 }
 
 /// Cleans up stale multipart upload sessions older than 24 hours.
@@ -144,10 +160,13 @@ async fn shutdown_signal() {
 
 /// Starts the StorageNode REST API server and background workers.
 pub async fn run(
-    config: Config,
+    mut config: Config,
     port_override: Option<u16>,
-    _headless: bool,
+    headless: bool,
 ) -> Result<(), AppError> {
+    if headless {
+        config.server.headless = true;
+    }
     let port = port_override.unwrap_or(config.server.port);
     let host = &config.server.host;
     let addr = format!("{}:{}", host, port);

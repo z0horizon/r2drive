@@ -179,7 +179,10 @@ impl Cli {
                 rm::execute(&bucket, remote_key).await?;
             }
             Commands::Serve { port, headless } => {
-                let config = Config::load(config_path)?;
+                let mut config = Config::load(config_path)?;
+                if *headless {
+                    config.server.headless = true;
+                }
                 crate::server::run(config, *port, *headless).await?;
             }
         }

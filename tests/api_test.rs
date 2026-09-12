@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-async fn setup_test_app() -> (axum::Router, AppState) {
+async fn setup_test_app_with_headless(headless: bool) -> (axum::Router, AppState) {
     let mut profiles = HashMap::new();
     profiles.insert(
         "primary".to_string(),
@@ -38,6 +38,7 @@ async fn setup_test_app() -> (axum::Router, AppState) {
         server: r2drive::config::ServerConfig {
             admin_password: "super-secret-password".to_string(),
             session_ttl_hours: 24,
+            headless,
             ..Default::default()
         },
         default_profile: "primary".to_string(),
@@ -53,6 +54,10 @@ async fn setup_test_app() -> (axum::Router, AppState) {
     let app = create_router(state.clone());
 
     (app, state)
+}
+
+async fn setup_test_app() -> (axum::Router, AppState) {
+    setup_test_app_with_headless(false).await
 }
 
 #[tokio::test]
@@ -580,4 +585,120 @@ async fn test_cors_preflight_request() {
             .unwrap(),
         "true"
     );
+}
+
+#[tokio::test]
+async fn test_assets_serving_root_when_not_headless() {
+    let (app, _) = setup_test_app().await;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/")
+        .body(Body::empty())
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let content_type = res
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .expect("Content-Type header present")
+        .to_str()
+        .unwrap();
+    assert!(content_type.contains("text/html"));
+
+    let body_bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let body = String::from_utf8_lossy(&body_bytes).to_lowercase();
+    assert!(
+        body.contains("r2drive") || body.contains("html"),
+        "Body should contain 'r2drive' or 'html'"
+    );
+}
+
+#[tokio::test]
+async fn test_assets_spa_fallback_for_unknown_route_when_not_headless() {
+    let (app, _) = setup_test_app().await;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/some/unknown/spa/route")
+        .body(Body::empty())
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let content_type = res
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .expect("Content-Type header present")
+        .to_str()
+        .unwrap();
+    assert!(content_type.contains("text/html"));
+
+    let body_bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let body = String::from_utf8_lossy(&body_bytes).to_lowercase();
+    assert!(
+        body.contains("r2drive") || body.contains("html"),
+        "Body should contain index.html fallback content"
+    );
+}
+
+#[tokio::test]
+async fn test_assets_serving_direct_file_when_not_headless() {
+    let (app, _) = setup_test_app().await;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/index.html")
+        .body(Body::empty())
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let content_type = res
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .expect("Content-Type header present")
+        .to_str()
+        .unwrap();
+    assert!(content_type.contains("text/html"));
+}
+
+#[tokio::test]
+async fn test_headless_mode_root_returns_404() {
+    let (app, _) = setup_test_app_with_headless(true).await;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/")
+        .body(Body::empty())
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    let body_bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let body = String::from_utf8_lossy(&body_bytes);
+    assert!(body.contains("WebConsole disabled in headless mode"));
+}
+
+#[tokio::test]
+async fn test_headless_mode_unknown_route_returns_404() {
+    let (app, _) = setup_test_app_with_headless(true).await;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/some/unknown/route")
+        .body(Body::empty())
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    let body_bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let body = String::from_utf8_lossy(&body_bytes);
+    assert!(body.contains("WebConsole disabled in headless mode"));
 }
