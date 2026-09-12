@@ -520,24 +520,24 @@ git commit -m "feat(web): implement API client wrappers and Svelte 5 reactive st
 **Interfaces:**
 - Produces: Polished interactive file manager with breadcrumb navigation, folder traversal, download links, and delete confirmations.
 
-- [ ] **Step 1: Implement `LoginModal.svelte` and conditional render in `App.svelte`**
+- [x] **Step 1: Implement `LoginModal.svelte` and conditional render in `App.svelte`**
 
 Render login challenge when unauthenticated; on submit calls `login()`, clears modal, and fetches buckets.
 
-- [ ] **Step 2: Implement Header and Breadcrumbs**
+- [x] **Step 2: Implement Header and Breadcrumbs**
 
 Render profile selector dropdown, dark/light toggle, and clickable breadcrumb segments.
 
-- [ ] **Step 3: Implement FileList, FileRow, FolderRow, and EmptyState**
+- [x] **Step 3: Implement FileList, FileRow, FolderRow, and EmptyState**
 
 Render directory contents: click folder enters prefix; download button triggers presigned GET; delete button opens `DeleteModal`.
 
-- [ ] **Step 4: Verify frontend build**
+- [x] **Step 4: Verify frontend build**
 
 Run: `cd web && pnpm build`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/components/ web/src/App.svelte
