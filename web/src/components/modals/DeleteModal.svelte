@@ -36,7 +36,8 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && !isDeleting) {
+    if (!open || !item || isDeleting) return;
+    if (e.key === 'Escape') {
       onClose();
     }
   }

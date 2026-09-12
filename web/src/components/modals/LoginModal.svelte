@@ -11,13 +11,13 @@
 
   async function handleSubmit(event: SubmitEvent) {
     event.preventDefault();
-    if (!password.trim() || isSubmitting) return;
+    if (!password || isSubmitting) return;
 
     isSubmitting = true;
     errorMessage = null;
 
     try {
-      await authStore.login(password.trim());
+      await authStore.login(password);
       password = '';
       await bucketStore.loadProfiles();
       onSuccess?.();
@@ -56,12 +56,14 @@
         <label for="admin-password" class="block text-xs font-medium text-slate-300">
           Admin Password
         </label>
+        <!-- svelte-ignore a11y_autofocus -->
         <input
           id="admin-password"
           type="password"
           bind:value={password}
           placeholder="••••••••••••"
           autocomplete="current-password"
+          autofocus
           disabled={isSubmitting}
           class="w-full rounded-lg border border-slate-700 bg-slate-800/80 px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-500 transition focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
         />
@@ -76,7 +78,7 @@
 
       <button
         type="submit"
-        disabled={isSubmitting || !password.trim()}
+        disabled={isSubmitting || !password}
         class="w-full flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-slate-900 disabled:cursor-not-allowed disabled:opacity-50 shadow-sm"
       >
         {#if isSubmitting}

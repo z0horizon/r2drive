@@ -150,6 +150,19 @@ export class BucketStore {
       this.loading = false;
     }
   }
+
+  /**
+   * Resets all bucket store state on session end or logout.
+   */
+  reset(): void {
+    this.profiles = [];
+    this.selectedProfile = '';
+    this.currentPrefix = '';
+    this.directories = [];
+    this.objects = [];
+    this.loading = false;
+    this.error = null;
+  }
 }
 
 export const bucketStore = new BucketStore();

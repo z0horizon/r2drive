@@ -1,7 +1,34 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { authStore } from '$lib/stores/auth.svelte';
   import { bucketStore } from '$lib/stores/bucket.svelte';
-  import { HardDrive, RefreshCw, LogOut } from 'lucide-svelte';
+  import { HardDrive, RefreshCw, LogOut, Sun, Moon } from 'lucide-svelte';
+
+  let isDark = $state(true);
+
+  onMount(() => {
+    const saved = typeof localStorage !== 'undefined' ? localStorage.getItem('r2drive-theme') : null;
+    if (saved === 'light') {
+      isDark = false;
+      document.documentElement.classList.remove('dark');
+    } else {
+      isDark = true;
+      document.documentElement.classList.add('dark');
+    }
+  });
+
+  function toggleTheme() {
+    isDark = !isDark;
+    if (typeof document !== 'undefined') {
+      if (isDark) {
+        document.documentElement.classList.add('dark');
+        localStorage.setItem('r2drive-theme', 'dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+        localStorage.setItem('r2drive-theme', 'light');
+      }
+    }
+  }
 
   async function handleProfileChange(event: Event) {
     const select = event.target as HTMLSelectElement;
@@ -17,6 +44,7 @@
 
   async function handleLogout() {
     await authStore.logout();
+    bucketStore.reset();
   }
 </script>
 
@@ -37,6 +65,22 @@
   </div>
 
   <div class="flex items-center space-x-2 sm:space-x-3">
+    <!-- Dark / Light Theme Toggle -->
+    <button
+      type="button"
+      onclick={toggleTheme}
+      title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+      class="inline-flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+    >
+      {#if isDark}
+        <Sun class="w-3.5 h-3.5 text-amber-400" />
+        <span class="hidden md:inline">Light</span>
+      {:else}
+        <Moon class="w-3.5 h-3.5 text-indigo-400" />
+        <span class="hidden md:inline">Dark</span>
+      {/if}
+    </button>
+
     {#if authStore.isAuthenticated}
       <!-- Bucket Profile Selector Dropdown -->
       {#if bucketStore.profiles.length > 0}

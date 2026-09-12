@@ -168,6 +168,28 @@ describe('BucketStore (bucket.svelte.ts)', () => {
     await store.deleteItem('remove.txt');
     expect(store.objects.map((o) => o.key)).toEqual(['keep.txt']);
   });
+
+  it('reset clears all bucket store state', () => {
+    const store = new BucketStore();
+    store.profiles = [{ name: 'primary', bucket: 'b', default: true }];
+    store.selectedProfile = 'primary';
+    store.currentPrefix = 'photos/';
+    store.directories = ['photos/vacation/'];
+    store.objects = [
+      { key: 'photos/img.jpg', name: 'img.jpg', size_bytes: 100, last_modified: '2026-09-12T00:00:00Z' },
+    ];
+    store.loading = true;
+    store.error = 'Some error';
+
+    store.reset();
+    expect(store.profiles).toEqual([]);
+    expect(store.selectedProfile).toBe('');
+    expect(store.currentPrefix).toBe('');
+    expect(store.directories).toEqual([]);
+    expect(store.objects).toEqual([]);
+    expect(store.loading).toBe(false);
+    expect(store.error).toBeNull();
+  });
 });
 
 describe('UploadStore (upload.svelte.ts)', () => {
