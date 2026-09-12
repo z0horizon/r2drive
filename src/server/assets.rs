@@ -10,14 +10,14 @@ pub struct Assets;
 
 /// Serves static assets from embedded web/dist/ folder with SPA fallback to index.html.
 pub async fn static_handler(method: Method, uri: Uri) -> Response {
-    if method != Method::GET && method != Method::HEAD {
-        return (StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed").into_response();
-    }
-
     let path = uri.path().trim_start_matches('/');
 
     if path.starts_with("api/") || path == "api" {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "API endpoint not found" }))).into_response();
+    }
+
+    if method != Method::GET && method != Method::HEAD {
+        return (StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed").into_response();
     }
 
     if let Some(content) = Assets::get(path) {

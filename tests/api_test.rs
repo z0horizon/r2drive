@@ -207,7 +207,7 @@ async fn test_login_valid_password_sets_cookie_and_returns_session() {
     assert!(logout_cookie.contains("Max-Age=0") || logout_cookie.contains("r2drive_session=;"));
 
     // Verify session removed from DB
-    let session = state.db.get_session(token).await.unwrap();
+    let session = state.db.get_session(&token_hash).await.unwrap();
     assert!(
         session.is_none(),
         "Session must be deleted from DB on logout"
