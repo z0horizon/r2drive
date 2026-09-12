@@ -450,16 +450,16 @@ git commit -m "feat(server): implement StorageNode REST API with auth, object, a
 **Interfaces:**
 - Produces: Standalone runnable Svelte 5 application building to `web/dist/`.
 
-- [ ] **Step 1: Initialize Svelte 5 + Vite configuration**
+- [x] **Step 1: Initialize Svelte 5 + Vite configuration**
 
 Set up `web/package.json` with `svelte@^5.0.0`, `vite`, `tailwindcss`, `lucide-svelte`. Configure proxy `/api -> http://localhost:8080` in `vite.config.ts`.
 
-- [ ] **Step 2: Verify frontend compiles clean**
+- [x] **Step 2: Verify frontend compiles clean**
 
 Run: `cd web && pnpm install && pnpm build`
 Expected: Build outputs to `web/dist/` without errors.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add web/
