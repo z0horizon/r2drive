@@ -7,6 +7,7 @@ use axum::{
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::json;
+use sha2::{Sha256, Digest};
 
 use crate::db::models::Session;
 use crate::error::AppError;
@@ -16,6 +17,12 @@ use crate::server::state::AppState;
 #[derive(Debug, Deserialize)]
 pub struct LoginRequest {
     pub password: String,
+}
+
+pub(crate) fn hash_token(token: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 /// Handler for POST /api/auth/login
@@ -32,7 +39,7 @@ pub async fn login(
     let expires_at = now + chrono::Duration::hours(state.config.server.session_ttl_hours as i64);
 
     let session = Session {
-        token_hash: token.clone(),
+        token_hash: hash_token(&token),
         created_at: now,
         expires_at,
     };
@@ -67,7 +74,8 @@ pub async fn logout(
     if let Some(Extension(auth_session)) = auth
         && let Some(ref token) = auth_session.token
     {
-        let _ = state.db.delete_session(token).await;
+        let token_hash = hash_token(token);
+        let _ = state.db.delete_session(&token_hash).await;
     }
 
     // 2. Also check Cookie header directly in case extension wasn't set
@@ -77,7 +85,8 @@ pub async fn logout(
         for part in cookie_str.split(';') {
             let part = part.trim();
             if let Some(token) = part.strip_prefix("r2drive_session=") {
-                let _ = state.db.delete_session(token.trim()).await;
+                let token_hash = hash_token(token.trim());
+                let _ = state.db.delete_session(&token_hash).await;
             }
         }
     }

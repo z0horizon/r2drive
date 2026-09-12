@@ -343,6 +343,8 @@ The embedded WebConsole is a reactive single-page application built with **Svelt
   - Pause, cancel, and resume active uploads.
   - Interrupted or dropped uploads prompt for instant resumption upon re-selecting or dropping the file.
 
+> **Note on Browser Uploads:** For browser-based direct multipart uploads to function correctly, you must configure CORS on your Cloudflare R2 bucket to allow `ExposeHeaders: ["ETag"]`. This allows the browser to read the ETag of completed parts to resume and assemble the file.
+
 ---
 
 ## REST API Reference

@@ -41,6 +41,10 @@ pub async fn delete_object(
     Path(profile): Path<String>,
     Query(query): Query<DeleteObjectQuery>,
 ) -> Result<Json<Value>, AppError> {
+    if query.key.trim().is_empty() {
+        return Err(AppError::BadRequest("Object key cannot be empty".to_string()));
+    }
+
     let bucket = state.r2.get_bucket(&profile)?;
 
     bucket

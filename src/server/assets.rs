@@ -1,5 +1,7 @@
-use axum::http::{StatusCode, Uri, header};
+use axum::http::{Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
+use axum::Json;
+use serde_json::json;
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
@@ -7,8 +9,17 @@ use rust_embed::RustEmbed;
 pub struct Assets;
 
 /// Serves static assets from embedded web/dist/ folder with SPA fallback to index.html.
-pub async fn static_handler(uri: Uri) -> Response {
+pub async fn static_handler(method: Method, uri: Uri) -> Response {
+    if method != Method::GET && method != Method::HEAD {
+        return (StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed").into_response();
+    }
+
     let path = uri.path().trim_start_matches('/');
+
+    if path.starts_with("api/") || path == "api" {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "API endpoint not found" }))).into_response();
+    }
+
     if let Some(content) = Assets::get(path) {
         let mime = mime_guess::from_path(path).first_or_octet_stream();
         ([(header::CONTENT_TYPE, mime.as_ref())], content.data).into_response()
@@ -36,7 +47,7 @@ mod tests {
     #[tokio::test]
     async fn test_static_handler_root_returns_index_html() {
         let uri: Uri = "/".parse().unwrap();
-        let res = static_handler(uri).await;
+        let res = static_handler(Method::GET, uri).await;
         assert_eq!(res.status(), StatusCode::OK);
         assert_eq!(
             res.headers().get(header::CONTENT_TYPE).unwrap(),
@@ -47,11 +58,25 @@ mod tests {
     #[tokio::test]
     async fn test_static_handler_spa_fallback() {
         let uri: Uri = "/buckets/my-bucket/nested/view".parse().unwrap();
-        let res = static_handler(uri).await;
+        let res = static_handler(Method::GET, uri).await;
         assert_eq!(res.status(), StatusCode::OK);
         assert_eq!(
             res.headers().get(header::CONTENT_TYPE).unwrap(),
             "text/html"
         );
+    }
+
+    #[tokio::test]
+    async fn test_static_handler_api_404() {
+        let uri: Uri = "/api/unknown/endpoint".parse().unwrap();
+        let res = static_handler(Method::GET, uri).await;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_static_handler_method_not_allowed() {
+        let uri: Uri = "/".parse().unwrap();
+        let res = static_handler(Method::POST, uri).await;
+        assert_eq!(res.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 }

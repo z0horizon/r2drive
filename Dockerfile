@@ -26,6 +26,9 @@ RUN cargo build --release
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates sqlite3 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
+RUN groupadd -r -g 10001 appuser && useradd -r -u 10001 -g appuser -d /app -s /sbin/nologin appuser
+RUN mkdir -p /data /etc/r2drive && chown -R appuser:appuser /data /etc/r2drive /app
+USER appuser:appuser
 COPY --from=rust-builder /app/target/release/r2drive /usr/local/bin/r2drive
 EXPOSE 8080
 VOLUME ["/data", "/etc/r2drive"]

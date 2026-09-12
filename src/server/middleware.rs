@@ -39,7 +39,8 @@ pub async fn require_auth(
         }
 
         // Session token match
-        if let Ok(Some(session)) = state.db.get_session(&token).await
+        let token_hash = crate::server::routes::auth::hash_token(&token);
+        if let Ok(Some(session)) = state.db.get_session(&token_hash).await
             && session.expires_at > Utc::now()
         {
             req.extensions_mut()
@@ -61,13 +62,15 @@ pub async fn require_auth(
             })
         });
 
-    if let Some(token) = cookie_token
-        && let Ok(Some(session)) = state.db.get_session(&token).await
-        && session.expires_at > Utc::now()
-    {
-        req.extensions_mut()
-            .insert(AuthenticatedSession { token: Some(token) });
-        return Ok(next.run(req).await);
+    if let Some(token) = cookie_token {
+        let token_hash = crate::server::routes::auth::hash_token(&token);
+        if let Ok(Some(session)) = state.db.get_session(&token_hash).await
+            && session.expires_at > Utc::now()
+        {
+            req.extensions_mut()
+                .insert(AuthenticatedSession { token: Some(token) });
+            return Ok(next.run(req).await);
+        }
     }
 
     Err(AppError::Auth(

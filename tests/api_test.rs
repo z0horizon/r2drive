@@ -146,7 +146,11 @@ async fn test_login_valid_password_sets_cookie_and_returns_session() {
         .expect("r2drive_session cookie present");
 
     // Verify session stored in DB
-    let session = state.db.get_session(token).await.unwrap();
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    let token_hash = format!("{:x}", hasher.finalize());
+    let session = state.db.get_session(&token_hash).await.unwrap();
     assert!(session.is_some(), "Session must exist in database");
 
     // Test GET /api/auth/me using Cookie
