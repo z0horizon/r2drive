@@ -648,11 +648,11 @@ git commit -m "feat(server): embed WebConsole static assets with SPA fallback an
 **Interfaces:**
 - Produces: Production-ready container image buildable with `docker build -t r2drive .`.
 
-- [ ] **Step 1: Create `.dockerignore`**
+- [x] **Step 1: Create `.dockerignore`**
 
 Exclude `.git`, `target`, `node_modules`, `*.db`.
 
-- [ ] **Step 2: Create Multi-stage `Dockerfile`**
+- [x] **Step 2: Create Multi-stage `Dockerfile`**
 
 ```dockerfile
 # Stage 1: Build WebConsole
@@ -684,16 +684,16 @@ ENV R2DRIVE_CONFIG=/etc/r2drive/config.yaml
 ENTRYPOINT ["r2drive", "serve"]
 ```
 
-- [ ] **Step 3: Create initial `README.md`**
+- [x] **Step 3: Create initial `README.md`**
 
 Document quickstart: configuration via YAML / ENV, `docker run` command, and CLI usage.
 
-- [ ] **Step 4: Verify full workspace tests pass**
+- [x] **Step 4: Verify full workspace tests pass**
 
 Run: `cargo test`
 Expected: All unit and integration tests PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Dockerfile .dockerignore README.md
