@@ -149,6 +149,7 @@ mod tests {
     #[test]
     fn test_r2kit_not_found_error_mapping() {
         let r2_err = r2kit::Error::NotFound;
+        assert!(r2_err.is_not_found());
         let app_err: AppError = r2_err.into();
         assert!(matches!(app_err, AppError::NotFound(_)));
         assert_eq!(app_err.into_response().status(), StatusCode::NOT_FOUND);

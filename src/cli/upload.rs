@@ -76,7 +76,13 @@ async fn try_resume_snapshot(
         return None;
     }
     let content = tokio::fs::read_to_string(snap_file).await.ok()?;
-    let snapshot = serde_json::from_str::<r2kit::MultipartSessionSnapshot>(&content).ok()?;
+    let snapshot = match serde_json::from_str::<r2kit::MultipartSessionSnapshot>(&content) {
+        Ok(s) => s,
+        Err(_) => {
+            let _ = tokio::fs::remove_file(snap_file).await;
+            return None;
+        }
+    };
     if snapshot.bucket() != bucket.name()
         || snapshot.key() != key
         || snapshot.file_size() != file_size

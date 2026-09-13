@@ -573,7 +573,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_abort_multipart_invalid_snapshot_params() {
+    async fn test_abort_multipart_invalid_upload_id() {
         let bucket = test_bucket();
         // Empty upload_id is invalid
         let err = abort_multipart_upload(&bucket, "large.bin", "")
