@@ -228,14 +228,7 @@ pub async fn abort_upload(
     }
 
     let bucket = state.r2.get_bucket(&profile)?;
-    abort_multipart_upload(
-        &bucket,
-        &session.object_key,
-        &session.upload_id,
-        session.file_size as u64,
-        session.part_size as u64,
-    )
-    .await?;
+    abort_multipart_upload(&bucket, &session.object_key, &session.upload_id).await?;
 
     state
         .db

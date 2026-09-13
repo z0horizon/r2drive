@@ -50,14 +50,13 @@ impl From<r2kit::ConfigError> for AppError {
 
 impl From<r2kit::Error> for AppError {
     fn from(err: r2kit::Error) -> Self {
+        if err.is_not_found() {
+            return AppError::NotFound(err.to_string());
+        }
         match err {
             r2kit::Error::Validation(e) => AppError::BadRequest(e.to_string()),
             r2kit::Error::InvalidInput { field, reason } => {
                 AppError::BadRequest(format!("Invalid input for {field}: {reason}"))
-            }
-            r2kit::Error::NotFound => AppError::NotFound("Remote resource not found".to_string()),
-            r2kit::Error::Remote(ref se) if se.kind() == r2kit::ServiceErrorKind::NotFound => {
-                AppError::NotFound(se.to_string())
             }
             r2kit::Error::Remote(ref se)
                 if se.kind() == r2kit::ServiceErrorKind::Authentication =>
