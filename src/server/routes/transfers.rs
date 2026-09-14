@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use crate::db::models::MultipartSessionRecord;
 use crate::error::AppError;
+use crate::r2::map_r2_error;
 use crate::r2::transfer::{
     CompletedPartReceipt, DEFAULT_PART_SIZE, abort_multipart_upload, complete_multipart_upload,
     generate_download_url, init_presigned_upload_with_content_type,
@@ -267,5 +268,22 @@ pub async fn download_object(
 
     Ok(Json(json!({
         "download_url": download_url,
+    })))
+}
+
+/// Handler for GET /api/buckets/{profile}/cors-probe
+pub async fn cors_probe(
+    State(state): State<AppState>,
+    Path(profile): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let bucket = state.r2.get_bucket(&profile)?;
+    let probe_url = bucket
+        .presign_put("/.r2drive-probe", 0, Duration::from_secs(60))
+        .await
+        .map_err(map_r2_error)?
+        .into_url_string();
+
+    Ok(Json(json!({
+        "probe_url": probe_url,
     })))
 }

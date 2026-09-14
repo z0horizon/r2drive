@@ -11,6 +11,33 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tower::ServiceExt;
 
+async fn setup_test_app_with_profiles(
+    headless: bool,
+    profiles: HashMap<String, BucketProfile>,
+    default_profile: &str,
+) -> (axum::Router, AppState) {
+    let config = Config {
+        server: r2drive::config::ServerConfig {
+            admin_password: "super-secret-password".to_string(),
+            session_ttl_hours: 24,
+            headless,
+            ..Default::default()
+        },
+        default_profile: default_profile.to_string(),
+        profiles,
+        ..Default::default()
+    };
+
+    let db = create_metadata_store("sqlite::memory:").await.unwrap();
+    let r2 = Arc::new(R2Manager::new(&config).unwrap());
+    let config = Arc::new(config);
+
+    let state = AppState { config, db, r2 };
+    let app = create_router(state.clone());
+
+    (app, state)
+}
+
 async fn setup_test_app_with_headless(headless: bool) -> (axum::Router, AppState) {
     let mut profiles = HashMap::new();
     profiles.insert(
@@ -34,26 +61,7 @@ async fn setup_test_app_with_headless(headless: bool) -> (axum::Router, AppState
         },
     );
 
-    let config = Config {
-        server: r2drive::config::ServerConfig {
-            admin_password: "super-secret-password".to_string(),
-            session_ttl_hours: 24,
-            headless,
-            ..Default::default()
-        },
-        default_profile: "primary".to_string(),
-        profiles,
-        ..Default::default()
-    };
-
-    let db = create_metadata_store("sqlite::memory:").await.unwrap();
-    let r2 = Arc::new(R2Manager::new(&config).unwrap());
-    let config = Arc::new(config);
-
-    let state = AppState { config, db, r2 };
-    let app = create_router(state.clone());
-
-    (app, state)
+    setup_test_app_with_profiles(headless, profiles, "primary").await
 }
 
 async fn setup_test_app() -> (axum::Router, AppState) {
@@ -705,4 +713,65 @@ async fn test_headless_mode_unknown_route_returns_404() {
     let body_bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
     let body = String::from_utf8_lossy(&body_bytes);
     assert!(body.contains("WebConsole disabled in headless mode"));
+}
+
+#[tokio::test]
+async fn test_cors_probe_endpoint() {
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "default".to_string(),
+        BucketProfile {
+            account_id: "0123456789abcdef0123456789abcdef".to_string(),
+            access_key_id: "test-access-key".to_string(),
+            secret_access_key: "test-secret-key".to_string(),
+            bucket_name: "test-bucket".to_string(),
+            public_url: None,
+        },
+    );
+    let (app, _) = setup_test_app_with_profiles(false, profiles, "default").await;
+
+    // Unauthenticated GET /api/buckets/default/cors-probe returns 401 Unauthorized
+    let unauth_req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/buckets/default/cors-probe")
+        .body(Body::empty())
+        .unwrap();
+    let unauth_res = app.clone().oneshot(unauth_req).await.unwrap();
+    assert_eq!(unauth_res.status(), StatusCode::UNAUTHORIZED);
+
+    // Authenticated GET /api/buckets/nonexistent/cors-probe returns 404 NotFound
+    let auth_nonexistent_req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/buckets/nonexistent/cors-probe")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .body(Body::empty())
+        .unwrap();
+    let auth_nonexistent_res = app.clone().oneshot(auth_nonexistent_req).await.unwrap();
+    assert_eq!(auth_nonexistent_res.status(), StatusCode::NOT_FOUND);
+
+    // Authenticated GET /api/buckets/default/cors-probe returns 200 OK with JSON {"probe_url": "..."} containing /.r2drive-probe
+    let auth_probe_req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/buckets/default/cors-probe")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .body(Body::empty())
+        .unwrap();
+    let auth_probe_res = app.clone().oneshot(auth_probe_req).await.unwrap();
+    assert_eq!(auth_probe_res.status(), StatusCode::OK);
+
+    let body_bytes = to_bytes(auth_probe_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&body_bytes).unwrap();
+    let probe_url = body["probe_url"]
+        .as_str()
+        .expect("probe_url field in response");
+    assert!(
+        probe_url.contains("/.r2drive-probe"),
+        "probe_url should contain /.r2drive-probe"
+    );
+    assert!(
+        probe_url.contains("X-Amz-Signature="),
+        "probe_url should be a signed URL"
+    );
 }
