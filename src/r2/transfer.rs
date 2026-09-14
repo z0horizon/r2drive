@@ -130,7 +130,7 @@ pub async fn init_presigned_upload_with_content_type(
 
     let session = builder.create().await.map_err(map_r2_error)?;
 
-    let upload_id = session.snapshot().expose_upload_id().to_string();
+    let upload_id = session.upload_id().to_string();
     let part_count = session.part_count();
     let mut parts = Vec::with_capacity(part_count as usize);
 
@@ -324,7 +324,7 @@ pub async fn generate_download_url(
             .presign_get(key, expires_in)
             .await
             .map_err(map_r2_error)?;
-        Ok(presigned.url().expose().to_string())
+        Ok(presigned.into_url_string())
     }
 }
 

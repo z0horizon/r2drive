@@ -228,7 +228,11 @@ pub async fn abort_upload(
     }
 
     let bucket = state.r2.get_bucket(&profile)?;
-    abort_multipart_upload(&bucket, &session.object_key, &session.upload_id).await?;
+    if let Err(err) = abort_multipart_upload(&bucket, &session.object_key, &session.upload_id).await
+        && !matches!(err, AppError::NotFound(_))
+    {
+        return Err(err);
+    }
 
     state
         .db

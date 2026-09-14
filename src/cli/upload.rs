@@ -183,11 +183,18 @@ pub async fn execute(
         }
         Err(err) => {
             if let Some(snapshot) = err.snapshot() {
-                if let Ok(path) = save_snapshot(snapshot).await {
-                    eprintln!(
-                        "Upload interrupted. Saved resume snapshot to {}",
-                        path.display()
-                    );
+                match save_snapshot(snapshot).await {
+                    Ok(path) => {
+                        eprintln!(
+                            "Upload interrupted. Saved resume snapshot to {}",
+                            path.display()
+                        );
+                    }
+                    Err(save_err) => {
+                        eprintln!(
+                            "Warning: upload interrupted, but failed to save resume snapshot: {save_err}"
+                        );
+                    }
                 }
             } else if was_resuming {
                 // If resuming from an existing snapshot and upload permanently failed without a snapshot,
