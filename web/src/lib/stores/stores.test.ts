@@ -201,6 +201,7 @@ describe('BucketStore (bucket.svelte.ts)', () => {
 
   it('checkCors sets corsStatus to checking then transitions to healthy on 200/204 OPTIONS response', async () => {
     const store = new BucketStore();
+    store.selectedProfile = 'primary';
     vi.spyOn(transfersApi, 'getCorsProbeUrl').mockResolvedValue('https://probe.r2.test/bucket/.r2drive-probe');
 
     let fetchResolve: (value: Response) => void;
@@ -231,6 +232,7 @@ describe('BucketStore (bucket.svelte.ts)', () => {
 
   it('checkCors transitions to blocked on 403 or fetch network failure', async () => {
     const store = new BucketStore();
+    store.selectedProfile = 'primary';
     vi.spyOn(transfersApi, 'getCorsProbeUrl').mockResolvedValue('https://probe.r2.test/bucket/.r2drive-probe');
 
     // 403 Forbidden
@@ -243,16 +245,19 @@ describe('BucketStore (bucket.svelte.ts)', () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'));
     await store.checkCors('primary');
     expect(store.corsStatus).toBe('blocked');
+  });
 
-    // Probe URL fetch failure
-    store.corsStatus = 'unknown';
+  it('backend probe API error leaves corsStatus as unknown rather than false-positive blocked', async () => {
+    const store = new BucketStore();
+    store.selectedProfile = 'primary';
     vi.spyOn(transfersApi, 'getCorsProbeUrl').mockRejectedValue(new Error('Probe URL API failed'));
     await store.checkCors('primary');
-    expect(store.corsStatus).toBe('blocked');
+    expect(store.corsStatus).toBe('unknown');
   });
 
   it('checkCors respects caching when force = false', async () => {
     const store = new BucketStore();
+    store.selectedProfile = 'primary';
     const probeSpy = vi.spyOn(transfersApi, 'getCorsProbeUrl').mockResolvedValue('https://probe.r2.test');
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
 
@@ -299,6 +304,58 @@ describe('BucketStore (bucket.svelte.ts)', () => {
     await store.checkCors();
     expect(probeSpy).toHaveBeenCalledWith('current-profile');
     expect(store.corsStatus).toBe('healthy');
+  });
+
+  it('does not overwrite corsStatus if selectedProfile changed while probe was in-flight', async () => {
+    const store = new BucketStore();
+    store.selectedProfile = 'bucket-a';
+
+    let fetchResolve: (value: Response) => void;
+    const fetchPromise = new Promise<Response>((resolve) => {
+      fetchResolve = resolve;
+    });
+    vi.spyOn(transfersApi, 'getCorsProbeUrl').mockResolvedValue('https://probe.r2.test/bucket-a/.r2drive-probe');
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() => fetchPromise);
+
+    // Start probe for bucket-a
+    const probePromise = store.checkCors('bucket-a');
+    expect(store.corsStatus).toBe('checking');
+
+    // While probe for bucket-a is in flight, user switches to bucket-b
+    store.selectedProfile = 'bucket-b';
+    store.corsStatus = 'unknown';
+
+    // Now bucket-a probe resolves with healthy OPTIONS response
+    fetchResolve!(new Response(null, { status: 200 }));
+    await probePromise;
+
+    // store.corsStatus should NOT have been overwritten by bucket-a probe!
+    expect(store.corsStatus).toBe('unknown');
+  });
+
+  it('does not overwrite corsStatus if selectedProfile changed while getCorsProbeUrl was pending', async () => {
+    const store = new BucketStore();
+    store.selectedProfile = 'bucket-a';
+
+    let probeResolve: (value: string) => void;
+    const probePromise = new Promise<string>((resolve) => {
+      probeResolve = resolve;
+    });
+    vi.spyOn(transfersApi, 'getCorsProbeUrl').mockReturnValue(probePromise);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    const checkPromise = store.checkCors('bucket-a');
+    expect(store.corsStatus).toBe('checking');
+
+    // Switch profile before probe URL resolves
+    store.selectedProfile = 'bucket-b';
+    store.corsStatus = 'unknown';
+
+    probeResolve!('https://probe.r2.test/bucket-a/.r2drive-probe');
+    await checkPromise;
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(store.corsStatus).toBe('unknown');
   });
 });
 

@@ -106,20 +106,29 @@ export class BucketStore {
     }
 
     this.corsStatus = 'checking';
+
+    let probeUrl: string;
     try {
-      const probeUrl = await getCorsProbeUrl(target);
+      probeUrl = await getCorsProbeUrl(target);
+    } catch {
+      // Backend API error (unauthorized/server error) should not trigger a false-positive CORS blocked banner.
+      if (target === this.selectedProfile) {
+        this.corsStatus = 'unknown';
+      }
+      return;
+    }
+
+    if (target !== this.selectedProfile) return;
+
+    try {
       const res = await fetch(probeUrl, {
         method: 'OPTIONS',
-        headers: {
-          'Access-Control-Request-Method': 'PUT',
-        },
+        headers: { 'Access-Control-Request-Method': 'PUT' },
       });
-      if (res.ok || res.status === 200 || res.status === 204) {
-        this.corsStatus = 'healthy';
-      } else {
-        this.corsStatus = 'blocked';
-      }
+      if (target !== this.selectedProfile) return;
+      this.corsStatus = (res.ok || res.status === 200 || res.status === 204) ? 'healthy' : 'blocked';
     } catch {
+      if (target !== this.selectedProfile) return;
       this.corsStatus = 'blocked';
     }
   }
