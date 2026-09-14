@@ -10,6 +10,9 @@ import {
   type ObjectItem,
   type PrefixListing,
 } from '../api/objects';
+import { getCorsProbeUrl } from '../api/transfers';
+
+export type CorsStatus = 'unknown' | 'checking' | 'healthy' | 'blocked';
 
 export interface Breadcrumb {
   label: string;
@@ -24,6 +27,7 @@ export class BucketStore {
   objects = $state<ObjectItem[]>([]);
   loading = $state<boolean>(false);
   error = $state<string | null>(null);
+  corsStatus = $state<CorsStatus>('unknown');
 
   /**
    * Reactive breadcrumb hierarchy derived from current prefix.
@@ -63,6 +67,8 @@ export class BucketStore {
       }
 
       if (this.selectedProfile) {
+        this.corsStatus = 'unknown';
+        void this.checkCors(this.selectedProfile);
         await this.fetchObjects(false);
       }
     } catch (err) {
@@ -78,7 +84,44 @@ export class BucketStore {
   async setProfile(profile: string): Promise<void> {
     this.selectedProfile = profile;
     this.currentPrefix = '';
+    this.corsStatus = 'unknown';
+    void this.checkCors(profile);
     await this.fetchObjects(false);
+  }
+
+  /**
+   * Performs an asynchronous, non-blocking OPTIONS preflight check against R2
+   * using a presigned probe URL to verify CORS configuration.
+   *
+   * @param profile Optional bucket profile name (defaults to currently selected profile).
+   * @param force When true, bypasses status caching and forces a new probe.
+   */
+  async checkCors(profile?: string, force = false): Promise<void> {
+    const target = profile ?? this.selectedProfile;
+    if (!target) {
+      return;
+    }
+    if (!force && this.corsStatus !== 'unknown') {
+      return;
+    }
+
+    this.corsStatus = 'checking';
+    try {
+      const probeUrl = await getCorsProbeUrl(target);
+      const res = await fetch(probeUrl, {
+        method: 'OPTIONS',
+        headers: {
+          'Access-Control-Request-Method': 'PUT',
+        },
+      });
+      if (res.ok || res.status === 200 || res.status === 204) {
+        this.corsStatus = 'healthy';
+      } else {
+        this.corsStatus = 'blocked';
+      }
+    } catch {
+      this.corsStatus = 'blocked';
+    }
   }
 
   /**
@@ -162,6 +205,7 @@ export class BucketStore {
     this.objects = [];
     this.loading = false;
     this.error = null;
+    this.corsStatus = 'unknown';
   }
 }
 

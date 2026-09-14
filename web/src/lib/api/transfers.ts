@@ -137,3 +137,15 @@ export async function abortUpload(
     }
   );
 }
+
+/**
+ * Fetches a presigned probe URL used to perform an OPTIONS preflight check for CORS.
+ *
+ * @param profile The bucket profile name.
+ */
+export async function getCorsProbeUrl(profile: string): Promise<string> {
+  const data = await apiRequest<{ probe_url: string }>(
+    `/api/buckets/${encodeURIComponent(profile)}/cors-probe`
+  );
+  return data.probe_url;
+}

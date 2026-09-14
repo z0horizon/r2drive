@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { apiRequest, ApiError } from './client';
 import { login, logout, checkAuth } from './auth';
 import { listBuckets, listObjects, deleteObject, getDownloadUrl } from './objects';
-import { initUpload, resumeUpload, completeUpload, abortUpload } from './transfers';
+import { initUpload, resumeUpload, completeUpload, abortUpload, getCorsProbeUrl } from './transfers';
 
 describe('API Client (client.ts)', () => {
   const originalFetch = globalThis.fetch;
@@ -323,6 +323,23 @@ describe('Transfers API (transfers.ts)', () => {
         method: 'POST',
         body: JSON.stringify({ upload_id: 'up-123' }),
       })
+    );
+  });
+
+  it('getCorsProbeUrl fetches presigned probe URL', async () => {
+    const mockProbe = { probe_url: 'https://r2.example.com/.r2drive-probe?token=xyz' };
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(mockProbe), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    const probeUrl = await getCorsProbeUrl('primary');
+    expect(probeUrl).toBe('https://r2.example.com/.r2drive-probe?token=xyz');
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/buckets/primary/cors-probe',
+      expect.anything()
     );
   });
 });

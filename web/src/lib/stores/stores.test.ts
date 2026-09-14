@@ -4,6 +4,7 @@ import { BucketStore, bucketStore } from './bucket.svelte';
 import { UploadStore, uploadStore } from './upload.svelte';
 import * as authApi from '../api/auth';
 import * as objectsApi from '../api/objects';
+import * as transfersApi from '../api/transfers';
 
 describe('AuthStore (auth.svelte.ts)', () => {
   beforeEach(() => {
@@ -179,7 +180,7 @@ describe('BucketStore (bucket.svelte.ts)', () => {
       { key: 'photos/img.jpg', name: 'img.jpg', size_bytes: 100, last_modified: '2026-09-12T00:00:00Z' },
     ];
     store.loading = true;
-    store.error = 'Some error';
+    store.corsStatus = 'healthy';
 
     store.reset();
     expect(store.profiles).toEqual([]);
@@ -189,6 +190,115 @@ describe('BucketStore (bucket.svelte.ts)', () => {
     expect(store.objects).toEqual([]);
     expect(store.loading).toBe(false);
     expect(store.error).toBeNull();
+    expect(store.corsStatus).toBe('unknown');
+  });
+
+  it('initializes corsStatus to unknown', () => {
+    const store = new BucketStore();
+    expect(store.corsStatus).toBe('unknown');
+    expect(bucketStore.corsStatus).toBe('unknown');
+  });
+
+  it('checkCors sets corsStatus to checking then transitions to healthy on 200/204 OPTIONS response', async () => {
+    const store = new BucketStore();
+    vi.spyOn(transfersApi, 'getCorsProbeUrl').mockResolvedValue('https://probe.r2.test/bucket/.r2drive-probe');
+
+    let fetchResolve: (value: Response) => void;
+    const fetchPromise = new Promise<Response>((resolve) => {
+      fetchResolve = resolve;
+    });
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => fetchPromise);
+
+    const checkPromise = store.checkCors('primary');
+    expect(store.corsStatus).toBe('checking');
+
+    fetchResolve!(new Response(null, { status: 200 }));
+    await checkPromise;
+    expect(store.corsStatus).toBe('healthy');
+    expect(fetchSpy).toHaveBeenCalledWith('https://probe.r2.test/bucket/.r2drive-probe', {
+      method: 'OPTIONS',
+      headers: {
+        'Access-Control-Request-Method': 'PUT',
+      },
+    });
+
+    // Also test 204 No Content response
+    store.corsStatus = 'unknown';
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));
+    await store.checkCors('primary');
+    expect(store.corsStatus).toBe('healthy');
+  });
+
+  it('checkCors transitions to blocked on 403 or fetch network failure', async () => {
+    const store = new BucketStore();
+    vi.spyOn(transfersApi, 'getCorsProbeUrl').mockResolvedValue('https://probe.r2.test/bucket/.r2drive-probe');
+
+    // 403 Forbidden
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 403 }));
+    await store.checkCors('primary');
+    expect(store.corsStatus).toBe('blocked');
+
+    // Network error / fetch rejection
+    store.corsStatus = 'unknown';
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'));
+    await store.checkCors('primary');
+    expect(store.corsStatus).toBe('blocked');
+
+    // Probe URL fetch failure
+    store.corsStatus = 'unknown';
+    vi.spyOn(transfersApi, 'getCorsProbeUrl').mockRejectedValue(new Error('Probe URL API failed'));
+    await store.checkCors('primary');
+    expect(store.corsStatus).toBe('blocked');
+  });
+
+  it('checkCors respects caching when force = false', async () => {
+    const store = new BucketStore();
+    const probeSpy = vi.spyOn(transfersApi, 'getCorsProbeUrl').mockResolvedValue('https://probe.r2.test');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
+
+    store.corsStatus = 'healthy';
+    await store.checkCors('primary', false);
+    expect(probeSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    store.corsStatus = 'blocked';
+    await store.checkCors('primary', false);
+    expect(probeSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    // When force = true, it should bypass cache
+    await store.checkCors('primary', true);
+    expect(probeSpy).toHaveBeenCalledWith('primary');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(store.corsStatus).toBe('healthy');
+  });
+
+  it('changing bucket profile re-checks or resets corsStatus', async () => {
+    const store = new BucketStore();
+    vi.spyOn(objectsApi, 'listObjects').mockResolvedValue({
+      prefix: '',
+      directories: [],
+      objects: [],
+      synced_at: '2026-09-12T00:00:00Z',
+    });
+    const checkSpy = vi.spyOn(store, 'checkCors').mockResolvedValue();
+
+    store.corsStatus = 'healthy';
+    await store.setProfile('secondary');
+
+    expect(store.selectedProfile).toBe('secondary');
+    expect(checkSpy).toHaveBeenCalledWith('secondary');
+  });
+
+  it('checkCors defaults to selectedProfile if profile argument is omitted', async () => {
+    const store = new BucketStore();
+    store.selectedProfile = 'current-profile';
+    const probeSpy = vi.spyOn(transfersApi, 'getCorsProbeUrl').mockResolvedValue('https://probe.r2.test');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
+
+    await store.checkCors();
+    expect(probeSpy).toHaveBeenCalledWith('current-profile');
+    expect(store.corsStatus).toBe('healthy');
   });
 });
 
