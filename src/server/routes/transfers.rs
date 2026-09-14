@@ -297,13 +297,17 @@ pub struct ProxyUploadQuery {
     pub content_type: Option<String>,
 }
 
-struct SyncBody<B> {
-    inner: B,
+pub struct SyncBody<B> {
+    inner: std::sync::Mutex<B>,
 }
 
-// Safety: `SyncBody` only exposes `&mut B` through `Pin<&mut Self>` in `poll_frame`,
-// never shared `&B` across threads.
-unsafe impl<B: Send> Sync for SyncBody<B> {}
+impl<B> SyncBody<B> {
+    pub fn new(inner: B) -> Self {
+        Self {
+            inner: std::sync::Mutex::new(inner),
+        }
+    }
+}
 
 impl<B> http_body::Body for SyncBody<B>
 where
@@ -316,15 +320,19 @@ where
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
-        std::pin::Pin::new(&mut self.inner).poll_frame(cx)
+        let inner = self.inner.get_mut().unwrap();
+        std::pin::Pin::new(inner).poll_frame(cx)
     }
 
     fn is_end_stream(&self) -> bool {
-        self.inner.is_end_stream()
+        self.inner
+            .lock()
+            .map(|b| b.is_end_stream())
+            .unwrap_or(false)
     }
 
     fn size_hint(&self) -> http_body::SizeHint {
-        self.inner.size_hint()
+        self.inner.lock().map(|b| b.size_hint()).unwrap_or_default()
     }
 }
 
@@ -336,8 +344,8 @@ pub async fn upload_proxy(
     headers: axum::http::HeaderMap,
     body: axum::body::Body,
 ) -> Result<Json<Value>, AppError> {
-    let trimmed_key = query.key.trim();
-    if trimmed_key.is_empty() {
+    let clean_key = query.key.trim().trim_start_matches('/');
+    if clean_key.is_empty() {
         return Err(AppError::BadRequest(
             "Object key cannot be empty".to_string(),
         ));
@@ -353,21 +361,28 @@ pub async fn upload_proxy(
             AppError::BadRequest("Content-Length header required for proxy upload".to_string())
         })?;
 
+    let resolved_content_type = query.content_type.clone().or_else(|| {
+        headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    });
+
     let mut options = r2kit::ObjectUploadOptions::default();
-    if let Some(ct) = query.content_type.as_deref() {
+    if let Some(ct) = resolved_content_type.as_deref() {
         options = options.with_content_type(ct);
     }
 
-    let byte_stream = aws_sdk_s3::primitives::ByteStream::from_body_1_x(SyncBody { inner: body });
+    let byte_stream = aws_sdk_s3::primitives::ByteStream::from_body_1_x(SyncBody::new(body));
 
     let put_res = bucket
-        .put_stream_with_options(trimmed_key, byte_stream, content_length, options)
+        .put_stream_with_options(clean_key, byte_stream, content_length, options)
         .await
         .map_err(map_r2_error)?;
 
     let now = Utc::now();
-    let parent_prefix = if let Some(idx) = trimmed_key.rfind('/') {
-        trimmed_key[..=idx].to_string()
+    let parent_prefix = if let Some(idx) = clean_key.rfind('/') {
+        clean_key[..=idx].to_string()
     } else {
         String::new()
     };
@@ -375,13 +390,13 @@ pub async fn upload_proxy(
     let record = DbObject {
         id: None,
         bucket_profile: profile.clone(),
-        object_key: trimmed_key.to_string(),
+        object_key: clean_key.to_string(),
         parent_prefix,
         is_directory: false,
         size_bytes: content_length as i64,
         etag: put_res.etag().map(String::from),
-        content_type: query.content_type.clone().or_else(|| {
-            mime_guess::from_path(trimmed_key)
+        content_type: resolved_content_type.or_else(|| {
+            mime_guess::from_path(clean_key)
                 .first_raw()
                 .map(ToString::to_string)
         }),
@@ -389,12 +404,29 @@ pub async fn upload_proxy(
         synced_at: now,
     };
 
-    let _ = state.db.upsert_objects(&profile, &[record]).await;
+    if let Err(e) = state.db.upsert_objects(&profile, &[record]).await {
+        tracing::error!("Failed to record proxy uploaded object into metadata store: {e}");
+    }
 
     Ok(Json(json!({
         "status": "uploaded",
-        "key": trimmed_key,
+        "key": clean_key,
         "size_bytes": content_length,
         "etag": put_res.etag(),
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_sync_body_streaming() {
+        let raw = b"streaming payload test";
+        let body = axum::body::Body::from(raw.to_vec());
+        let sync_body = SyncBody::new(body);
+        let byte_stream = aws_sdk_s3::primitives::ByteStream::from_body_1_x(sync_body);
+        let collected = byte_stream.collect().await.unwrap().into_bytes();
+        assert_eq!(collected.as_ref(), raw);
+    }
 }

@@ -833,6 +833,22 @@ async fn test_upload_proxy_endpoint() {
     let ws_body: Value = serde_json::from_slice(&ws_bytes).unwrap();
     assert_eq!(ws_body["error"], "Object key cannot be empty");
 
+    // Also test slash-only key returns 400 BadRequest
+    let slash_key_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/buckets/default/upload/proxy?key=///")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .header(header::CONTENT_LENGTH, "11")
+        .body(Body::from("hello world"))
+        .unwrap();
+    let slash_key_res = app.clone().oneshot(slash_key_req).await.unwrap();
+    assert_eq!(slash_key_res.status(), StatusCode::BAD_REQUEST);
+    let slash_bytes = to_bytes(slash_key_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let slash_body: Value = serde_json::from_slice(&slash_bytes).unwrap();
+    assert_eq!(slash_body["error"], "Object key cannot be empty");
+
     // 3. Authenticated POST with missing Content-Length header returns 400 BadRequest
     let no_cl_req = Request::builder()
         .method(Method::POST)
