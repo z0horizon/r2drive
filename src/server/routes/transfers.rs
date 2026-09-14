@@ -19,6 +19,8 @@ use crate::server::state::AppState;
 
 const MULTIPART_THRESHOLD: u64 = DEFAULT_PART_SIZE; // 10MB (10_485_760 bytes)
 const URL_EXPIRATION: Duration = Duration::from_secs(3600); // 1 hour
+const CORS_PROBE_KEY: &str = ".r2drive-probe";
+const CORS_PROBE_EXPIRATION: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Deserialize)]
 pub struct InitUploadRequest {
@@ -278,7 +280,7 @@ pub async fn cors_probe(
 ) -> Result<Json<Value>, AppError> {
     let bucket = state.r2.get_bucket(&profile)?;
     let probe_url = bucket
-        .presign_put("/.r2drive-probe", 0, Duration::from_secs(60))
+        .presign_put(CORS_PROBE_KEY, 0, CORS_PROBE_EXPIRATION)
         .await
         .map_err(map_r2_error)?
         .into_url_string();

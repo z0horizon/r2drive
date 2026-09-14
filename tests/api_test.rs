@@ -82,6 +82,7 @@ async fn test_unauthenticated_requests_return_401() {
         ("POST", "/api/buckets/primary/upload/complete"),
         ("POST", "/api/buckets/primary/upload/abort"),
         ("GET", "/api/buckets/primary/download?key=test.txt"),
+        ("GET", "/api/buckets/primary/cors-probe"),
     ];
 
     for (method, uri) in endpoints {
@@ -767,8 +768,8 @@ async fn test_cors_probe_endpoint() {
         .as_str()
         .expect("probe_url field in response");
     assert!(
-        probe_url.contains("/.r2drive-probe"),
-        "probe_url should contain /.r2drive-probe"
+        probe_url.contains(".r2drive-probe"),
+        "probe_url should contain .r2drive-probe"
     );
     assert!(
         probe_url.contains("X-Amz-Signature="),
