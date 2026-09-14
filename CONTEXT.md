@@ -71,3 +71,11 @@ _Avoid_: UploadJob, ResumeState, TransferTask
 **StaleUploadCleanup**:
 The automated maintenance procedure aborting incomplete multipart uploads that have remained inactive beyond a 24-hour threshold to prevent storage waste.
 _Avoid_: GarbageCollect, AbortJob, PartCleaner
+
+**CorsProbe**:
+The lightweight preflight health-check verification performed by WebConsole against Cloudflare R2 to determine if direct transfers are permitted by the bucket's CORS policy.
+_Avoid_: CorsCheck, PreflightPing, CorsPing
+
+**ProxyTransferFallback**:
+The fail-safe streaming upload path routed through StorageNode when direct PresignedTransfer is blocked by browser CORS enforcement.
+_Avoid_: ServerUpload, ProxyUpload, FallbackStream
