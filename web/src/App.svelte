@@ -50,12 +50,14 @@
 {:else}
   <div class="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans antialiased">
     <Header />
-    <CorsBanner onConfigure={() => (showCorsModal = true)} />
 
     {#if !authStore.isAuthenticated}
       <!-- Authentication challenge modal -->
       <LoginModal />
     {:else}
+      <!-- Amber CORS Warning Banner -->
+      <CorsBanner onConfigure={() => (showCorsModal = true)} />
+
       <!-- Main Content Area -->
       <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6">
         <!-- Error Alert Banner -->
@@ -111,10 +113,10 @@
 
         <!-- Floating Upload Manager Panel -->
         <UploadModal />
-
-        <!-- CORS Setup & Diagnostic Modal -->
-        <CorsModal open={showCorsModal} onclose={() => (showCorsModal = false)} />
       </main>
+
+      <!-- CORS Setup & Diagnostic Modal -->
+      <CorsModal open={showCorsModal} onClose={() => (showCorsModal = false)} />
     {/if}
   </div>
 {/if}

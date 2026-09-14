@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import { bucketStore } from '$lib/stores/bucket.svelte';
   import {
     AlertTriangle,
@@ -12,12 +13,12 @@
 
   let {
     open = false,
-    onclose,
     onClose,
+    onclose,
   }: {
     open: boolean;
-    onclose?: () => void;
     onClose?: () => void;
+    onclose?: () => void;
   } = $props();
 
   let copied = $state(false);
@@ -26,9 +27,15 @@
   let checkResult = $state<'idle' | 'success' | 'failed'>('idle');
 
   const currentOrigin =
-    typeof window !== 'undefined' && window.location.origin
+    typeof window !== 'undefined' && window.location.origin && window.location.origin !== 'null'
       ? window.location.origin
       : 'http://localhost:8080';
+
+  const currentBucket = $derived(
+    bucketStore.profiles.find((p) => p.name === bucketStore.selectedProfile)?.bucket ||
+      bucketStore.selectedProfile ||
+      'default'
+  );
 
   const corsSnippet = [
     {
@@ -43,9 +50,14 @@
   const corsJson = JSON.stringify(corsSnippet, null, 2);
 
   function handleClose() {
+    if (copyTimeout) {
+      clearTimeout(copyTimeout);
+      copyTimeout = null;
+    }
+    copied = false;
     checkResult = 'idle';
-    onclose?.();
     onClose?.();
+    onclose?.();
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -56,17 +68,42 @@
   }
 
   async function handleCopy() {
-    try {
-      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+    let success = false;
+
+    // Standard Clipboard API (requires secure context HTTPS or localhost)
+    if (typeof navigator !== 'undefined' && navigator.clipboard && window.isSecureContext) {
+      try {
         await navigator.clipboard.writeText(corsJson);
+        success = true;
+      } catch {
+        success = false;
       }
+    }
+
+    // Fallback for non-secure HTTP / LAN contexts using temporary textarea
+    if (!success && typeof document !== 'undefined') {
+      try {
+        const textarea = document.createElement('textarea');
+        textarea.value = corsJson;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        textarea.style.pointerEvents = 'none';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        success = document.execCommand('copy');
+        document.body.removeChild(textarea);
+      } catch {
+        success = false;
+      }
+    }
+
+    if (success) {
       copied = true;
       if (copyTimeout) clearTimeout(copyTimeout);
       copyTimeout = setTimeout(() => {
         copied = false;
       }, 2000);
-    } catch {
-      // Clipboard write fallback
     }
   }
 
@@ -79,7 +116,7 @@
         checkResult = 'success';
         setTimeout(() => {
           handleClose();
-        }, 600);
+        }, 800);
       } else {
         checkResult = 'failed';
       }
@@ -89,6 +126,13 @@
       isChecking = false;
     }
   }
+
+  onDestroy(() => {
+    if (copyTimeout) {
+      clearTimeout(copyTimeout);
+      copyTimeout = null;
+    }
+  });
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -113,10 +157,10 @@
           </div>
           <div>
             <h3 id="cors-dialog-title" class="text-base font-semibold text-white">
-              Cấu hình CORS cho Bucket
+              Configure Cloudflare R2 CORS
             </h3>
             <p class="text-xs text-slate-400">
-              Cloudflare R2 yêu cầu quy tắc CORS để trình duyệt có thể upload trực tiếp
+              Cloudflare R2 requires a CORS policy to allow direct browser uploads
             </p>
           </div>
         </div>
@@ -124,7 +168,7 @@
           type="button"
           onclick={handleClose}
           class="p-1 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition"
-          aria-label="Đóng"
+          aria-label="Close"
         >
           <X class="w-4 h-4" />
         </button>
@@ -134,7 +178,7 @@
       <div
         class="flex items-center justify-between gap-3 p-3 rounded-xl bg-slate-950/60 border border-slate-800 text-xs text-slate-300"
       >
-        <span class="truncate">Truy cập trang quản lý bucket trên Cloudflare Dashboard:</span>
+        <span class="truncate">Open bucket management on Cloudflare Dashboard:</span>
         <a
           href="https://dash.cloudflare.com/?to=/:account/r2/overview"
           target="_blank"
@@ -149,17 +193,17 @@
       <!-- 3-Step Guide -->
       <div class="space-y-2">
         <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-400">
-          Hướng dẫn 3 bước cấu hình
+          Setup Instructions
         </h4>
         <ol class="space-y-2 text-xs text-slate-300 list-decimal list-inside bg-slate-950/40 p-3.5 rounded-xl border border-slate-800">
           <li class="leading-relaxed">
-            Mở <strong>Cloudflare R2 Dashboard</strong>, chọn bucket <span class="font-mono text-indigo-400">{bucketStore.selectedProfile || 'hiện tại'}</span> và chuyển sang tab <strong>Settings</strong>.
+            Open <strong>Cloudflare Dashboard</strong> &gt; <strong>R2</strong> &gt; select bucket <span class="font-mono text-indigo-400">{currentBucket}</span> (profile: {bucketStore.selectedProfile || 'default'}) &gt; <strong>Settings</strong> &gt; <strong>CORS Policy</strong>.
           </li>
           <li class="leading-relaxed">
-            Cuộn xuống phần <strong>CORS Policy</strong>, chọn <strong>Add CORS policy</strong> (hoặc <strong>Edit</strong> nếu đã có).
+            Paste the JSON configuration below and click <strong>Save</strong>.
           </li>
           <li class="leading-relaxed">
-            Sao chép đoạn mã JSON bên dưới, dán vào ô cấu hình và nhấn <strong>Save</strong>.
+            Return here and click <strong>Re-check</strong>.
           </li>
         </ol>
       </div>
@@ -177,7 +221,7 @@
           >
             {#if copied}
               <Check class="w-3.5 h-3.5 text-emerald-400" />
-              <span class="text-emerald-400 font-medium">Đã copy!</span>
+              <span class="text-emerald-400 font-medium">Copied!</span>
             {:else}
               <Copy class="w-3.5 h-3.5" />
               <span>Copy JSON</span>
@@ -198,14 +242,14 @@
           class="flex items-start gap-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-300"
         >
           <AlertTriangle class="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
-          <span>CORS vẫn chưa được kích hoạt. Hãy đảm bảo bạn đã nhấn <strong>Save</strong> trên Cloudflare Dashboard và thử lại sau vài giây (Cloudflare có thể mất 5-10 giây để cập nhật).</span>
+          <span>CORS is still not configured. Ensure you clicked Save on the Cloudflare Dashboard and wait a few seconds before retrying.</span>
         </div>
       {:else if checkResult === 'success'}
         <div
           class="flex items-start gap-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-300"
         >
           <Check class="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
-          <span>Kiểm tra thành công! CORS đã được cấu hình hợp lệ. Đang đóng cửa sổ...</span>
+          <span>CORS check succeeded! Bucket is ready for direct uploads.</span>
         </div>
       {/if}
 
@@ -216,7 +260,7 @@
           onclick={handleClose}
           class="px-4 py-2 rounded-lg text-xs font-medium text-slate-300 hover:bg-slate-800 hover:text-white border border-slate-700 transition"
         >
-          Đóng
+          Close
         </button>
         <button
           type="button"
@@ -226,10 +270,10 @@
         >
           {#if isChecking || bucketStore.corsStatus === 'checking'}
             <RefreshCw class="w-3.5 h-3.5 animate-spin" />
-            <span>Đang kiểm tra...</span>
+            <span>Checking...</span>
           {:else}
             <RefreshCw class="w-3.5 h-3.5" />
-            <span>Kiểm tra lại (Re-check)</span>
+            <span>Re-check</span>
           {/if}
         </button>
       </div>
