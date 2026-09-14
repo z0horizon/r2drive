@@ -236,8 +236,9 @@ async function executeProxyFallback(
   profile: string,
   key: string,
   signal: AbortSignal,
-  startTime: number
+  _startTime: number
 ): Promise<UploadItem> {
+  const proxyStartTime = Date.now();
   uploadStore.setFallback(item.id);
   uploadStore.updateProgress(item.id, 0, 0, 0);
   bucketStore.corsStatus = 'blocked';
@@ -248,14 +249,14 @@ async function executeProxyFallback(
     file,
     (loaded, total) => {
       const progress = total > 0 ? Math.min(99, Math.round((loaded / total) * 100)) : 0;
-      const elapsedSec = Math.max(0.1, (Date.now() - startTime) / 1000);
+      const elapsedSec = Math.max(0.1, (Date.now() - proxyStartTime) / 1000);
       const speed = Math.round(loaded / elapsedSec);
       uploadStore.updateProgress(item.id, progress, speed, loaded);
     },
     signal
   );
 
-  const elapsedSec = Math.max(0.1, (Date.now() - startTime) / 1000);
+  const elapsedSec = Math.max(0.1, (Date.now() - proxyStartTime) / 1000);
   const speed = Math.round(file.size / elapsedSec);
   uploadStore.updateProgress(item.id, 100, speed, file.size);
   uploadStore.markComplete(item.id);

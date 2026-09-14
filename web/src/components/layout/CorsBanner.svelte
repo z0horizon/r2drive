@@ -11,9 +11,11 @@
   let wasBlocked = $state(false);
 
   $effect(() => {
+    // Track selectedProfile to reset wasBlocked when switching buckets
+    void bucketStore.selectedProfile;
     if (bucketStore.corsStatus === 'blocked') {
       wasBlocked = true;
-    } else if (bucketStore.corsStatus === 'healthy') {
+    } else if (bucketStore.corsStatus === 'healthy' || bucketStore.corsStatus === 'unknown') {
       wasBlocked = false;
     }
   });

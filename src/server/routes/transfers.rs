@@ -361,12 +361,20 @@ pub async fn upload_proxy(
             AppError::BadRequest("Content-Length header required for proxy upload".to_string())
         })?;
 
-    let resolved_content_type = query.content_type.clone().or_else(|| {
-        headers
-            .get(axum::http::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string)
-    });
+    let resolved_content_type = query
+        .content_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            headers
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        });
 
     let mut options = r2kit::ObjectUploadOptions::default();
     if let Some(ct) = resolved_content_type.as_deref() {
