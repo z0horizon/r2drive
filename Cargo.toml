@@ -6,8 +6,10 @@ rust-version = "1.94.1"
 
 [dependencies]
 r2kit = { version = "0.2.1", path = "../r2kit", features = ["serde", "tracing"] }
+aws-sdk-s3 = { version = "=1.143.0", default-features = false, features = ["rt-tokio"] }
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["macros"] }
+http-body = "1"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "postgres", "chrono", "migrate"] }
 clap = { version = "4", features = ["derive", "env"] }

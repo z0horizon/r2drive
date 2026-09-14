@@ -52,6 +52,10 @@ pub fn create_router(state: AppState) -> Router {
             "/api/buckets/{profile}/cors-probe",
             get(routes::transfers::cors_probe),
         )
+        .route(
+            "/api/buckets/{profile}/upload/proxy",
+            post(routes::transfers::upload_proxy),
+        )
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             middleware::require_auth,

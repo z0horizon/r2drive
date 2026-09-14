@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::time::Duration;
 
-use crate::db::models::MultipartSessionRecord;
+use crate::db::models::{DbObject, MultipartSessionRecord};
 use crate::error::AppError;
 use crate::r2::map_r2_error;
 use crate::r2::transfer::{
@@ -287,5 +287,114 @@ pub async fn cors_probe(
 
     Ok(Json(json!({
         "probe_url": probe_url,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProxyUploadQuery {
+    pub key: String,
+    #[serde(default)]
+    pub content_type: Option<String>,
+}
+
+struct SyncBody<B> {
+    inner: B,
+}
+
+// Safety: `SyncBody` only exposes `&mut B` through `Pin<&mut Self>` in `poll_frame`,
+// never shared `&B` across threads.
+unsafe impl<B: Send> Sync for SyncBody<B> {}
+
+impl<B> http_body::Body for SyncBody<B>
+where
+    B: http_body::Body + Send + Unpin + 'static,
+{
+    type Data = B::Data;
+    type Error = B::Error;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        std::pin::Pin::new(&mut self.inner).poll_frame(cx)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        self.inner.size_hint()
+    }
+}
+
+/// Handler for POST /api/buckets/{profile}/upload/proxy?key=...&content_type=...
+pub async fn upload_proxy(
+    State(state): State<AppState>,
+    Path(profile): Path<String>,
+    Query(query): Query<ProxyUploadQuery>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Body,
+) -> Result<Json<Value>, AppError> {
+    let trimmed_key = query.key.trim();
+    if trimmed_key.is_empty() {
+        return Err(AppError::BadRequest(
+            "Object key cannot be empty".to_string(),
+        ));
+    }
+
+    let bucket = state.r2.get_bucket(&profile)?;
+
+    let content_length = headers
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .ok_or_else(|| {
+            AppError::BadRequest("Content-Length header required for proxy upload".to_string())
+        })?;
+
+    let mut options = r2kit::ObjectUploadOptions::default();
+    if let Some(ct) = query.content_type.as_deref() {
+        options = options.with_content_type(ct);
+    }
+
+    let byte_stream = aws_sdk_s3::primitives::ByteStream::from_body_1_x(SyncBody { inner: body });
+
+    let put_res = bucket
+        .put_stream_with_options(trimmed_key, byte_stream, content_length, options)
+        .await
+        .map_err(map_r2_error)?;
+
+    let now = Utc::now();
+    let parent_prefix = if let Some(idx) = trimmed_key.rfind('/') {
+        trimmed_key[..=idx].to_string()
+    } else {
+        String::new()
+    };
+
+    let record = DbObject {
+        id: None,
+        bucket_profile: profile.clone(),
+        object_key: trimmed_key.to_string(),
+        parent_prefix,
+        is_directory: false,
+        size_bytes: content_length as i64,
+        etag: put_res.etag().map(String::from),
+        content_type: query.content_type.clone().or_else(|| {
+            mime_guess::from_path(trimmed_key)
+                .first_raw()
+                .map(ToString::to_string)
+        }),
+        last_modified: now,
+        synced_at: now,
+    };
+
+    let _ = state.db.upsert_objects(&profile, &[record]).await;
+
+    Ok(Json(json!({
+        "status": "uploaded",
+        "key": trimmed_key,
+        "size_bytes": content_length,
+        "etag": put_res.etag(),
     })))
 }

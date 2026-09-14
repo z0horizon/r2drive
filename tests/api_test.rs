@@ -83,6 +83,7 @@ async fn test_unauthenticated_requests_return_401() {
         ("POST", "/api/buckets/primary/upload/abort"),
         ("GET", "/api/buckets/primary/download?key=test.txt"),
         ("GET", "/api/buckets/primary/cors-probe"),
+        ("POST", "/api/buckets/primary/upload/proxy?key=test.txt"),
     ];
 
     for (method, uri) in endpoints {
@@ -775,4 +776,87 @@ async fn test_cors_probe_endpoint() {
         probe_url.contains("X-Amz-Signature="),
         "probe_url should be a signed URL"
     );
+}
+
+#[tokio::test]
+async fn test_upload_proxy_endpoint() {
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "default".to_string(),
+        BucketProfile {
+            account_id: "0123456789abcdef0123456789abcdef".to_string(),
+            access_key_id: "test-access-key".to_string(),
+            secret_access_key: "test-secret-key".to_string(),
+            bucket_name: "test-bucket".to_string(),
+            public_url: None,
+        },
+    );
+    let (app, _) = setup_test_app_with_profiles(false, profiles, "default").await;
+
+    // 1. Unauthenticated POST /api/buckets/default/upload/proxy?key=hello.txt returns 401 Unauthorized
+    let unauth_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/buckets/default/upload/proxy?key=hello.txt")
+        .header(header::CONTENT_LENGTH, "11")
+        .body(Body::from("hello world"))
+        .unwrap();
+    let unauth_res = app.clone().oneshot(unauth_req).await.unwrap();
+    assert_eq!(unauth_res.status(), StatusCode::UNAUTHORIZED);
+
+    // 2. Authenticated POST with empty key returns 400 BadRequest ("Object key cannot be empty")
+    let empty_key_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/buckets/default/upload/proxy?key=")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .header(header::CONTENT_LENGTH, "11")
+        .body(Body::from("hello world"))
+        .unwrap();
+    let empty_key_res = app.clone().oneshot(empty_key_req).await.unwrap();
+    assert_eq!(empty_key_res.status(), StatusCode::BAD_REQUEST);
+    let body_bytes = to_bytes(empty_key_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(body["error"], "Object key cannot be empty");
+
+    // Also test whitespace key returns 400 BadRequest
+    let ws_key_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/buckets/default/upload/proxy?key=%20%20")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .header(header::CONTENT_LENGTH, "11")
+        .body(Body::from("hello world"))
+        .unwrap();
+    let ws_key_res = app.clone().oneshot(ws_key_req).await.unwrap();
+    assert_eq!(ws_key_res.status(), StatusCode::BAD_REQUEST);
+    let ws_bytes = to_bytes(ws_key_res.into_body(), usize::MAX).await.unwrap();
+    let ws_body: Value = serde_json::from_slice(&ws_bytes).unwrap();
+    assert_eq!(ws_body["error"], "Object key cannot be empty");
+
+    // 3. Authenticated POST with missing Content-Length header returns 400 BadRequest
+    let no_cl_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/buckets/default/upload/proxy?key=hello.txt")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .body(Body::from("hello world"))
+        .unwrap();
+    let no_cl_res = app.clone().oneshot(no_cl_req).await.unwrap();
+    assert_eq!(no_cl_res.status(), StatusCode::BAD_REQUEST);
+    let no_cl_bytes = to_bytes(no_cl_res.into_body(), usize::MAX).await.unwrap();
+    let no_cl_body: Value = serde_json::from_slice(&no_cl_bytes).unwrap();
+    assert_eq!(
+        no_cl_body["error"],
+        "Content-Length header required for proxy upload"
+    );
+
+    // 4. Authenticated POST with missing/invalid profile returns 404 NotFound
+    let not_found_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/buckets/nonexistent/upload/proxy?key=hello.txt")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .header(header::CONTENT_LENGTH, "11")
+        .body(Body::from("hello world"))
+        .unwrap();
+    let not_found_res = app.clone().oneshot(not_found_req).await.unwrap();
+    assert_eq!(not_found_res.status(), StatusCode::NOT_FOUND);
 }
