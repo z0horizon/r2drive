@@ -655,4 +655,171 @@ describe('Upload Engine Execution (worker.ts)', () => {
     expect(item.status).toBe('failed');
     expect(item.error).toContain('HTTP 403: Forbidden');
   });
+
+  describe('WebConsole Resilient Upload Fallback & Seamless Retry', () => {
+    class MockXHR {
+      static instances: MockXHR[] = [];
+      static onSend: ((xhr: MockXHR, body?: any) => void) | null = null;
+
+      open = vi.fn();
+      setRequestHeader = vi.fn();
+      send = vi.fn((body?: any) => {
+        if (MockXHR.onSend) {
+          MockXHR.onSend(this, body);
+        }
+      });
+      abort = vi.fn(() => {
+        if (this.onabort) this.onabort();
+      });
+      withCredentials = false;
+      status = 200;
+      responseText = '';
+      upload = {
+        onprogress: null as ((e: any) => void) | null,
+      };
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+
+      constructor() {
+        MockXHR.instances.push(this);
+      }
+    }
+
+    beforeEach(() => {
+      MockXHR.instances = [];
+      MockXHR.onSend = null;
+      (globalThis as any).XMLHttpRequest = MockXHR;
+      uploadStore.clearAll();
+      bucketStore.corsStatus = 'unknown';
+    });
+
+    afterEach(() => {
+      delete (globalThis as any).XMLHttpRequest;
+    });
+
+    it('falls back to uploadViaProxy when single upload direct PUT throws CORS TypeError', async () => {
+      const fileSize = 1024; // 1KB < 10MB -> single PUT
+      const file = new File([new Uint8Array(fileSize)], 'cors-file.txt', { type: 'text/plain' });
+      const refreshSpy = vi.spyOn(bucketStore, 'refresh').mockResolvedValue();
+
+      globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/upload/init')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                mode: 'single',
+                upload_url: 'https://r2.direct/cors-file.txt',
+              }),
+              { status: 200, headers: { 'Content-Type': 'application/json' } }
+            )
+          );
+        }
+
+        if (url.includes('https://r2.direct/cors-file.txt')) {
+          // Browser throws TypeError: Failed to fetch on CORS block
+          return Promise.reject(new TypeError('Failed to fetch'));
+        }
+
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      MockXHR.onSend = (xhr) => {
+        xhr.upload?.onprogress?.({ lengthComputable: true, loaded: fileSize, total: fileSize });
+        xhr.status = 200;
+        xhr.responseText = JSON.stringify({
+          status: 'uploaded',
+          key: 'cors-file.txt',
+          size_bytes: fileSize,
+          etag: '"proxy-etag-123"',
+        });
+        xhr.onload?.();
+      };
+
+      const item = await uploadFile(file, 'primary', '');
+
+      expect(MockXHR.instances).toHaveLength(1);
+      const xhr = MockXHR.instances[0];
+      expect(xhr.open).toHaveBeenCalledWith(
+        'POST',
+        '/api/buckets/primary/upload/proxy?key=cors-file.txt'
+      );
+      expect(bucketStore.corsStatus).toBe('blocked');
+      expect(item.fallback).toBe(true);
+      expect(item.status).toBe('completed');
+      expect(item.progress).toBe(100);
+      expect(refreshSpy).toHaveBeenCalled();
+    });
+
+    it('falls back to uploadViaProxy when multipart upload encounters CORS TypeError', async () => {
+      const fileSize = 20 * 1024 * 1024; // 20MB -> multipart
+      const file = new File([new Uint8Array(fileSize)], 'large-cors.bin', { type: 'application/octet-stream' });
+      const refreshSpy = vi.spyOn(bucketStore, 'refresh').mockResolvedValue();
+      let abortedMultipartId = '';
+
+      globalThis.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (url.includes('/upload/init')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                mode: 'multipart',
+                upload_id: 'mp-cors-session',
+                part_size: PART_SIZE,
+                parts: [
+                  { part_number: 1, url: 'https://r2.presigned/part-1' },
+                  { part_number: 2, url: 'https://r2.presigned/part-2' },
+                ],
+              }),
+              { status: 200, headers: { 'Content-Type': 'application/json' } }
+            )
+          );
+        }
+
+        if (url.includes('/part-1') || url.includes('/part-2')) {
+          // Direct part upload blocked by CORS
+          return Promise.reject(new TypeError('Failed to fetch'));
+        }
+
+        if (url.includes('/upload/abort')) {
+          const body = JSON.parse(init?.body as string);
+          abortedMultipartId = body.upload_id;
+          return Promise.resolve(
+            new Response(JSON.stringify({ status: 'aborted' }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            })
+          );
+        }
+
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      MockXHR.onSend = (xhr) => {
+        xhr.upload?.onprogress?.({ lengthComputable: true, loaded: fileSize, total: fileSize });
+        xhr.status = 200;
+        xhr.responseText = JSON.stringify({
+          status: 'uploaded',
+          key: 'large-cors.bin',
+          size_bytes: fileSize,
+          etag: '"proxy-etag-large"',
+        });
+        xhr.onload?.();
+      };
+
+      const item = await uploadFile(file, 'primary', '');
+
+      expect(MockXHR.instances).toHaveLength(1);
+      const xhr = MockXHR.instances[0];
+      expect(xhr.open).toHaveBeenCalledWith(
+        'POST',
+        '/api/buckets/primary/upload/proxy?key=large-cors.bin'
+      );
+      expect(bucketStore.corsStatus).toBe('blocked');
+      expect(item.fallback).toBe(true);
+      expect(item.status).toBe('completed');
+      expect(item.progress).toBe(100);
+      expect(abortedMultipartId).toBe('mp-cors-session');
+      expect(refreshSpy).toHaveBeenCalled();
+    });
+  });
 });

@@ -125,9 +125,16 @@
               <div class="flex items-center space-x-2 min-w-0">
                 <FileText class="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
                 <div class="min-w-0">
-                  <p class="text-xs font-medium text-slate-200 truncate" title={item.name}>
-                    {item.name}
-                  </p>
+                  <div class="flex items-center space-x-1.5 min-w-0">
+                    <p class="text-xs font-medium text-slate-200 truncate" title={item.name}>
+                      {item.name}
+                    </p>
+                    {#if item.fallback}
+                      <span class="text-xs px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 font-medium shrink-0">
+                        Proxy fallback
+                      </span>
+                    {/if}
+                  </div>
                   <p class="text-[10px] text-slate-400 font-mono">
                     {formatBytes(item.totalBytes)} • {item.key}
                   </p>

@@ -149,3 +149,91 @@ export async function getCorsProbeUrl(profile: string): Promise<string> {
   );
   return data.probe_url;
 }
+
+export interface ProxyUploadResponse {
+  status: string;
+  key: string;
+  size_bytes: number;
+  etag?: string;
+}
+
+/**
+ * Uploads a file or blob through the server streaming proxy fallback endpoint
+ * using XMLHttpRequest for granular upload progress tracking and abort support.
+ *
+ * @param profile The bucket profile name.
+ * @param key The destination object key in the bucket.
+ * @param file File or Blob to upload.
+ * @param onProgress Optional callback reporting (loadedBytes, totalBytes).
+ * @param signal Optional AbortSignal for user cancellation.
+ */
+export function uploadViaProxy(
+  profile: string,
+  key: string,
+  file: File | Blob,
+  onProgress?: (loaded: number, total: number) => void,
+  signal?: AbortSignal
+): Promise<ProxyUploadResponse> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Upload aborted by user', 'AbortError'));
+      return;
+    }
+
+    const xhr = new XMLHttpRequest();
+    const url = `/api/buckets/${encodeURIComponent(profile)}/upload/proxy?key=${encodeURIComponent(key)}`;
+    xhr.open('POST', url);
+    xhr.withCredentials = true;
+
+    if (file.type) {
+      xhr.setRequestHeader('Content-Type', file.type);
+    }
+
+    if (xhr.upload && onProgress) {
+      xhr.upload.onprogress = (e: ProgressEvent) => {
+        if (e.lengthComputable) {
+          onProgress(e.loaded, e.total);
+        }
+      };
+    }
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const data = JSON.parse(xhr.responseText);
+          resolve(data);
+        } catch {
+          resolve(xhr.responseText as any);
+        }
+      } else {
+        let errorMsg = `Proxy upload failed with status ${xhr.status}`;
+        try {
+          const data = JSON.parse(xhr.responseText);
+          if (data && data.error) {
+            errorMsg = data.error;
+          }
+        } catch {}
+        reject(new Error(errorMsg));
+      }
+    };
+
+    xhr.onerror = () => {
+      reject(new Error('Network error during proxy upload'));
+    };
+
+    xhr.onabort = () => {
+      reject(new DOMException('Upload aborted by user', 'AbortError'));
+    };
+
+    if (signal) {
+      const abortHandler = () => {
+        xhr.abort();
+        reject(new DOMException('Upload aborted by user', 'AbortError'));
+      };
+      signal.addEventListener('abort', abortHandler, { once: true });
+    }
+
+    xhr.send(file);
+  });
+}
+

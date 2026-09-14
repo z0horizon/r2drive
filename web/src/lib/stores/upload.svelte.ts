@@ -17,6 +17,7 @@ export interface UploadItem {
   uploadId?: string; // Multipart upload session ID when applicable
   totalBytes: number;
   uploadedBytes: number;
+  fallback?: boolean;
 }
 
 export interface AddUploadOptions {
