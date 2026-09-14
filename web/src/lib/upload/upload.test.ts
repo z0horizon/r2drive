@@ -181,7 +181,7 @@ describe('Upload Part Retry and Backoff (uploadPartWithRetry)', () => {
     globalThis.fetch = vi.fn().mockImplementation(() => {
       callCount++;
       if (callCount === 1) {
-        return Promise.reject(new TypeError('Failed to fetch'));
+        return Promise.reject(new Error('connection reset by peer'));
       }
       return Promise.resolve(new Response(null, { status: 200, headers: { ETag: '"recovered-after-net-err"' } }));
     });
@@ -247,6 +247,17 @@ describe('Upload Part Retry and Backoff (uploadPartWithRetry)', () => {
     await expect(
       uploadPartWithRetry('https://r2.example.com/part1', blob, undefined, 5, 10)
     ).rejects.toThrow(/HTTP 403: Forbidden/);
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws immediately on CORS / fetch failure error without retrying', async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+
+    const blob = new Blob(['data']);
+    await expect(
+      uploadPartWithRetry('https://r2.example.com/part1', blob, undefined, 5, 10)
+    ).rejects.toThrow(/Failed to fetch/);
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
@@ -820,6 +831,50 @@ describe('Upload Engine Execution (worker.ts)', () => {
       expect(item.progress).toBe(100);
       expect(abortedMultipartId).toBe('mp-cors-session');
       expect(refreshSpy).toHaveBeenCalled();
+    });
+
+    it('skips direct presigned upload and fast-paths directly to proxy fallback when corsStatus is blocked', async () => {
+      bucketStore.corsStatus = 'blocked';
+      const fileSize = 2048;
+      const file = new File([new Uint8Array(fileSize)], 'already-blocked.txt', { type: 'text/plain' });
+      const fetchSpy = vi.fn();
+      globalThis.fetch = fetchSpy;
+
+      MockXHR.onSend = (xhr) => {
+        xhr.upload?.onprogress?.({ lengthComputable: true, loaded: fileSize, total: fileSize });
+        xhr.status = 200;
+        xhr.responseText = JSON.stringify({
+          status: 'uploaded',
+          key: 'already-blocked.txt',
+          size_bytes: fileSize,
+          etag: '"proxy-etag-fastpath"',
+        });
+        xhr.onload?.();
+      };
+
+      const item = await uploadFile(file, 'primary', '');
+
+      // Direct presigned init / PUT was never called because status was already blocked
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(MockXHR.instances).toHaveLength(1);
+      expect(item.fallback).toBe(true);
+      expect(item.status).toBe('completed');
+      expect(item.progress).toBe(100);
+    });
+
+    it('uploadStore.setFallback flags fallback and clears uploadId', () => {
+      const item = uploadStore.add({
+        file: new Blob(['hello']),
+        key: 'doc.txt',
+        profile: 'primary',
+      });
+      uploadStore.setUploadId(item.id, 'mp-session-to-clear');
+      expect(item.uploadId).toBe('mp-session-to-clear');
+      expect(item.fallback).toBeFalsy();
+
+      uploadStore.setFallback(item.id);
+      expect(item.fallback).toBe(true);
+      expect(item.uploadId).toBeUndefined();
     });
   });
 });

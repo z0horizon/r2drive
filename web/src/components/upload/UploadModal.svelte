@@ -130,7 +130,10 @@
                       {item.name}
                     </p>
                     {#if item.fallback}
-                      <span class="text-xs px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 font-medium shrink-0">
+                      <span
+                        class="text-xs px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-medium shrink-0"
+                        title="Uploaded via server proxy (CORS not configured on bucket)"
+                      >
                         Proxy fallback
                       </span>
                     {/if}

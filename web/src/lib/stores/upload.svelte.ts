@@ -182,6 +182,17 @@ export class UploadStore {
   }
 
   /**
+   * Marks a transfer as using server proxy fallback and clears multipart upload session ID.
+   */
+  setFallback(id: string): void {
+    const item = this.items.find((i) => i.id === id);
+    if (item) {
+      item.fallback = true;
+      item.uploadId = undefined; // clear multipart session id so abort doesn't 404
+    }
+  }
+
+  /**
    * Removes a transfer item by ID.
    */
   removeItem(id: string): void {

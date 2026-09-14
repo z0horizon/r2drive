@@ -89,45 +89,22 @@ export function formatUploadErrorMessage(err: unknown): string {
 /**
  * Detects whether an error is caused by a CORS restriction or network block.
  * When direct-to-R2 upload is blocked by browser CORS policies, browsers throw
- * a TypeError ("Failed to fetch", "NetworkError", "Load failed").
+ * specific error messages ("Failed to fetch", "NetworkError", "Load failed", etc.).
  */
 export function isCorsOrNetworkError(err: unknown): boolean {
-  if (!err) return false;
-  if (err instanceof DOMException && err.name === 'AbortError') {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { name?: string; message?: string };
+  if (e.name === 'AbortError' || e.message?.toLowerCase().includes('abort')) {
     return false;
   }
-  if (err instanceof Error) {
-    if (
-      err.name === 'AbortError' ||
-      err.message.includes('aborted') ||
-      err.message.includes('Aborted')
-    ) {
-      return false;
-    }
-    const msg = err.message || '';
-    if (
-      err.name === 'TypeError' ||
-      msg.includes('Failed to fetch') ||
-      msg.includes('NetworkError') ||
-      msg.includes('Load failed') ||
-      msg.includes('CORS') ||
-      msg.includes('cors') ||
-      msg.includes('blocked by CORS')
-    ) {
-      return true;
-    }
-  }
-  if (typeof err === 'string') {
-    return (
-      err.includes('Failed to fetch') ||
-      err.includes('NetworkError') ||
-      err.includes('Load failed') ||
-      err.includes('CORS') ||
-      err.includes('cors') ||
-      err.includes('blocked by CORS')
-    );
-  }
-  return false;
+  const msg = (e.message || '').toLowerCase();
+  return (
+    msg.includes('failed to fetch') ||
+    msg.includes('networkerror') ||
+    msg.includes('load failed') ||
+    msg.includes('cors') ||
+    msg.includes('access-control-allow-origin')
+  );
 }
 
 export async function sleep(ms: number): Promise<void> {
@@ -188,6 +165,10 @@ export async function uploadPartWithRetry(
           err.message.startsWith('HTTP 404:') ||
           err.message.startsWith('HTTP 405:'))
       ) {
+        throw err;
+      }
+      // Do not retry on CORS or network block error: fail immediately to allow fast fallback
+      if (isCorsOrNetworkError(err)) {
         throw err;
       }
       lastError = err;
@@ -257,7 +238,8 @@ async function executeProxyFallback(
   signal: AbortSignal,
   startTime: number
 ): Promise<UploadItem> {
-  item.fallback = true;
+  uploadStore.setFallback(item.id);
+  uploadStore.updateProgress(item.id, 0, 0, 0);
   bucketStore.corsStatus = 'blocked';
 
   await uploadViaProxy(
@@ -303,6 +285,10 @@ export async function uploadFile(
   const startTime = Date.now();
 
   try {
+    if (bucketStore.corsStatus === 'blocked') {
+      return await executeProxyFallback(item, file, profile, key, controller.signal, startTime);
+    }
+
     if (file.size < PART_SIZE) {
       // Small file single PUT upload
       uploadStore.updateProgress(item.id, 0, 0, 0);

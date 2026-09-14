@@ -459,6 +459,21 @@ describe('Transfers API (transfers.ts)', () => {
       await expect(promise).rejects.toThrow(/aborted/i);
     });
 
+    it('cleans up abort event listener when upload completes successfully', async () => {
+      const controller = new AbortController();
+      const removeSpy = vi.spyOn(controller.signal, 'removeEventListener');
+      const file = new File(['data'], 'test.bin');
+
+      const promise = uploadViaProxy('default', 'test.bin', file, undefined, controller.signal);
+      const xhr = MockXMLHttpRequest.instances[0];
+      xhr.status = 200;
+      xhr.responseText = JSON.stringify({ status: 'uploaded', key: 'test.bin', size_bytes: 4 });
+      xhr.onload?.();
+
+      await promise;
+      expect(removeSpy).toHaveBeenCalledWith('abort', expect.any(Function));
+    });
+
     it('rejects with error when XHR encounters network error', async () => {
       const file = new File(['data'], 'test.bin');
       const promise = uploadViaProxy('default', 'test.bin', file);

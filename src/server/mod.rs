@@ -54,7 +54,7 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route(
             "/api/buckets/{profile}/upload/proxy",
-            post(routes::transfers::upload_proxy),
+            post(routes::transfers::upload_proxy).layer(axum::extract::DefaultBodyLimit::disable()),
         )
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),

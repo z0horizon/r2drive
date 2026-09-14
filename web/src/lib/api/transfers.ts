@@ -197,7 +197,16 @@ export function uploadViaProxy(
       };
     }
 
+    let abortHandler: (() => void) | null = null;
+    const cleanup = () => {
+      if (signal && abortHandler) {
+        signal.removeEventListener('abort', abortHandler);
+        abortHandler = null;
+      }
+    };
+
     xhr.onload = () => {
+      cleanup();
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
           const data = JSON.parse(xhr.responseText);
@@ -218,16 +227,19 @@ export function uploadViaProxy(
     };
 
     xhr.onerror = () => {
+      cleanup();
       reject(new Error('Network error during proxy upload'));
     };
 
     xhr.onabort = () => {
+      cleanup();
       reject(new DOMException('Upload aborted by user', 'AbortError'));
     };
 
     if (signal) {
-      const abortHandler = () => {
+      abortHandler = () => {
         xhr.abort();
+        cleanup();
         reject(new DOMException('Upload aborted by user', 'AbortError'));
       };
       signal.addEventListener('abort', abortHandler, { once: true });
