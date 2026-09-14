@@ -2037,9 +2037,7 @@ dependencies = [
 
 [[package]]
 name = "r2kit"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b7374f81837e599d77810b50d6c8ec7cdd9fb71ae9647703a0f0e8324337dde"
+version = "0.2.1"
 dependencies = [
  "aws-sdk-s3",
  "aws-smithy-types",
@@ -2051,7 +2049,9 @@ dependencies = [
  "mime",
  "oxilangtag",
  "percent-encoding",
+ "serde",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

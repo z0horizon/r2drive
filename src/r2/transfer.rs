@@ -125,10 +125,7 @@ pub async fn init_presigned_upload_with_content_type(
         .part_size(part_size);
 
     if let Some(ct) = content_type {
-        let mime = ct
-            .parse::<r2kit::mime::Mime>()
-            .map_err(|e| AppError::BadRequest(format!("Invalid content_type '{ct}': {e}")))?;
-        builder = builder.content_type(mime);
+        builder = builder.content_type(ct);
     }
 
     let session = builder.create().await.map_err(map_r2_error)?;
@@ -146,7 +143,7 @@ pub async fn init_presigned_upload_with_content_type(
 
         parts.push(PresignedPart {
             part_number: part_num,
-            url: presigned.request().url().expose().to_string(),
+            url: presigned.into_url_string(),
         });
     }
 
@@ -177,10 +174,7 @@ pub async fn init_single_presigned_upload_with_content_type(
 ) -> Result<String, AppError> {
     let mut options = r2kit::ObjectUploadOptions::default();
     if let Some(ct) = content_type {
-        let mime = ct
-            .parse::<r2kit::mime::Mime>()
-            .map_err(|e| AppError::BadRequest(format!("Invalid content_type '{ct}': {e}")))?;
-        options = options.with_content_type(mime);
+        options = options.with_content_type(ct);
     }
 
     let presigned = bucket
@@ -188,7 +182,7 @@ pub async fn init_single_presigned_upload_with_content_type(
         .await
         .map_err(map_r2_error)?;
 
-    Ok(presigned.into_request().url().expose().to_string())
+    Ok(presigned.into_url_string())
 }
 
 /// Completes a multipart upload on R2 by submitting all part numbers and ETags.
@@ -267,7 +261,7 @@ pub async fn resume_multipart_upload(
 
         remaining_parts.push(PresignedPart {
             part_number: missing.get(),
-            url: presigned.request().url().expose().to_string(),
+            url: presigned.into_url_string(),
         });
     }
 
@@ -278,28 +272,16 @@ pub async fn resume_multipart_upload(
     })
 }
 
-/// Aborts an in-flight multipart upload session on R2.
+/// Aborts an in-flight multipart upload session on R2 directly without needing snapshot restoration.
 pub async fn abort_multipart_upload(
     bucket: &r2kit::Bucket,
     key: &str,
     upload_id: &str,
-    file_size: u64,
-    part_size: u64,
 ) -> Result<(), AppError> {
-    let snapshot = r2kit::MultipartSessionSnapshot::restore(
-        bucket.name(),
-        key,
-        upload_id,
-        file_size,
-        part_size,
-    )
-    .map_err(map_r2_error)?;
-
-    let session = bucket
-        .resume_presigned_multipart(snapshot)
+    bucket
+        .abort_multipart_upload(key, upload_id)
+        .await
         .map_err(map_r2_error)?;
-
-    session.abort().await.map_err(map_r2_error)?;
 
     Ok(())
 }
@@ -591,10 +573,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_abort_multipart_invalid_snapshot_params() {
+    async fn test_abort_multipart_invalid_upload_id() {
         let bucket = test_bucket();
         // Empty upload_id is invalid
-        let err = abort_multipart_upload(&bucket, "large.bin", "", 10 * MB, 10 * MB)
+        let err = abort_multipart_upload(&bucket, "large.bin", "")
             .await
             .unwrap_err();
 
@@ -665,7 +647,7 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err_single, AppError::BadRequest(_)));
-        assert!(err_single.to_string().contains("Invalid content_type"));
+        assert!(err_single.to_string().contains("content_type"));
 
         // Multipart upload with invalid MIME
         let err_multi = init_presigned_upload_with_content_type(
@@ -680,7 +662,7 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err_multi, AppError::BadRequest(_)));
-        assert!(err_multi.to_string().contains("Invalid content_type"));
+        assert!(err_multi.to_string().contains("content_type"));
     }
 
     #[tokio::test]

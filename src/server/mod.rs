@@ -104,8 +104,6 @@ pub async fn cleanup_stale_multipart_sessions(state: &AppState) -> Result<usize,
                 &bucket,
                 &session.object_key,
                 &session.upload_id,
-                session.file_size as u64,
-                session.part_size as u64,
             )
             .await
         {
