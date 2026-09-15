@@ -287,6 +287,10 @@ pub async fn cors_probe(
 
     Ok(Json(json!({
         "probe_url": probe_url,
+        "fallback_policy": {
+            "enabled": state.config.transfers.proxy_fallback,
+            "max_payload_bytes": state.config.transfers.max_payload_bytes(),
+        }
     })))
 }
 
@@ -362,6 +366,7 @@ pub async fn upload_proxy(
     let content_length = headers
         .get(axum::http::header::CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
+        .map(str::trim)
         .and_then(|v| v.parse::<u64>().ok())
         .ok_or_else(|| {
             AppError::BadRequest("Content-Length header required for proxy upload".to_string())

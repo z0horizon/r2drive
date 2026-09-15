@@ -776,6 +776,13 @@ async fn test_cors_probe_endpoint() {
         probe_url.contains("X-Amz-Signature="),
         "probe_url should be a signed URL"
     );
+
+    let fallback_policy = &body["fallback_policy"];
+    assert_eq!(fallback_policy["enabled"], true);
+    assert_eq!(
+        fallback_policy["max_payload_bytes"],
+        5 * 1024 * 1024 * 1024u64
+    );
 }
 
 #[tokio::test]
