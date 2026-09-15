@@ -876,3 +876,94 @@ async fn test_upload_proxy_endpoint() {
     let not_found_res = app.clone().oneshot(not_found_req).await.unwrap();
     assert_eq!(not_found_res.status(), StatusCode::NOT_FOUND);
 }
+
+async fn setup_test_app_with_transfers_config(
+    transfers: r2drive::config::TransfersConfig,
+) -> (axum::Router, AppState) {
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "default".to_string(),
+        BucketProfile {
+            account_id: "0123456789abcdef0123456789abcdef".to_string(),
+            access_key_id: "test-access-key".to_string(),
+            secret_access_key: "test-secret-key".to_string(),
+            bucket_name: "test-bucket".to_string(),
+            public_url: None,
+        },
+    );
+    let config = Config {
+        server: r2drive::config::ServerConfig {
+            admin_password: "super-secret-password".to_string(),
+            session_ttl_hours: 24,
+            headless: false,
+            ..Default::default()
+        },
+        default_profile: "default".to_string(),
+        profiles,
+        transfers,
+        ..Default::default()
+    };
+
+    let db = create_metadata_store("sqlite::memory:").await.unwrap();
+    let r2 = Arc::new(R2Manager::new(&config).unwrap());
+    let config = Arc::new(config);
+
+    let state = AppState { config, db, r2 };
+    let app = create_router(state.clone());
+
+    (app, state)
+}
+
+#[tokio::test]
+async fn test_upload_proxy_fallback_disabled_returns_403() {
+    let transfers = r2drive::config::TransfersConfig {
+        proxy_fallback: false,
+        max_proxy_file_size: "5GB".to_string(),
+    };
+    let (app, _) = setup_test_app_with_transfers_config(transfers).await;
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/buckets/default/upload/proxy?key=test.txt")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .header(header::CONTENT_LENGTH, "11")
+        .body(Body::from("hello world"))
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        body["error"],
+        "Proxy upload fallback is disabled by server configuration"
+    );
+}
+
+#[tokio::test]
+async fn test_upload_proxy_payload_too_large_returns_413() {
+    let transfers = r2drive::config::TransfersConfig {
+        proxy_fallback: true,
+        max_proxy_file_size: "10B".to_string(),
+    };
+    let (app, _) = setup_test_app_with_transfers_config(transfers).await;
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/buckets/default/upload/proxy?key=test.txt")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .header(header::CONTENT_LENGTH, "11")
+        .body(Body::from("hello world"))
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("exceeds maximum proxy upload size limit")
+    );
+}

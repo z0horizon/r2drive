@@ -344,6 +344,12 @@ pub async fn upload_proxy(
     headers: axum::http::HeaderMap,
     body: axum::body::Body,
 ) -> Result<Json<Value>, AppError> {
+    if !state.config.transfers.proxy_fallback {
+        return Err(AppError::Forbidden(
+            "Proxy upload fallback is disabled by server configuration".to_string(),
+        ));
+    }
+
     let clean_key = query.key.trim().trim_start_matches('/');
     if clean_key.is_empty() {
         return Err(AppError::BadRequest(
@@ -360,6 +366,13 @@ pub async fn upload_proxy(
         .ok_or_else(|| {
             AppError::BadRequest("Content-Length header required for proxy upload".to_string())
         })?;
+
+    let max_bytes = state.config.transfers.max_payload_bytes();
+    if content_length > max_bytes {
+        return Err(AppError::PayloadTooLarge(format!(
+            "File size ({content_length} bytes) exceeds maximum proxy upload size limit of {max_bytes} bytes",
+        )));
+    }
 
     let resolved_content_type = query
         .content_type

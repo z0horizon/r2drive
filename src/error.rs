@@ -20,6 +20,10 @@ pub enum AppError {
     NotFound(String),
     #[error("Invalid request: {0}")]
     BadRequest(String),
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
+    #[error("Payload too large: {0}")]
+    PayloadTooLarge(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -28,8 +32,10 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {
             AppError::Auth(msg) => (StatusCode::UNAUTHORIZED, msg.clone()),
+            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
+            AppError::PayloadTooLarge(msg) => (StatusCode::PAYLOAD_TOO_LARGE, msg.clone()),
             AppError::Config(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.clone()),
             AppError::Db(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
             AppError::Migration(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
@@ -172,5 +178,19 @@ mod tests {
         let app_err: AppError = r2_err.into();
         assert!(matches!(app_err, AppError::R2(_)));
         assert_eq!(app_err.into_response().status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[test]
+    fn test_forbidden_status() {
+        let err = AppError::Forbidden("access denied".to_string());
+        let res = err.into_response();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn test_payload_too_large_status() {
+        let err = AppError::PayloadTooLarge("too large".to_string());
+        let res = err.into_response();
+        assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 }
