@@ -235,8 +235,7 @@ async function executeProxyFallback(
   file: File | Blob,
   profile: string,
   key: string,
-  signal: AbortSignal,
-  _startTime: number
+  signal: AbortSignal
 ): Promise<UploadItem> {
   const proxyStartTime = Date.now();
   uploadStore.setFallback(item.id);
@@ -287,7 +286,7 @@ export async function uploadFile(
 
   try {
     if (bucketStore.corsStatus === 'blocked') {
-      return await executeProxyFallback(item, file, profile, key, controller.signal, startTime);
+      return await executeProxyFallback(item, file, profile, key, controller.signal);
     }
 
     if (file.size < PART_SIZE) {
@@ -327,7 +326,7 @@ export async function uploadFile(
           throw directErr;
         }
         if (isCorsOrNetworkError(directErr)) {
-          return await executeProxyFallback(item, file, profile, key, controller.signal, startTime);
+          return await executeProxyFallback(item, file, profile, key, controller.signal);
         }
         throw directErr;
       }
@@ -387,18 +386,12 @@ export async function uploadFile(
         throw directErr;
       }
       if (isCorsOrNetworkError(directErr)) {
-        try {
-          await abortUpload(profile, initRes.upload_id);
-        } catch (abortErr) {
-          console.warn(`Failed to abort multipart upload ${initRes.upload_id}:`, abortErr);
-        }
-        try {
-          await deleteSession(initRes.upload_id);
-        } catch (delErr) {
-          console.warn(`Failed to delete session ${initRes.upload_id}:`, delErr);
-        }
+        await Promise.allSettled([
+          abortUpload(profile, initRes.upload_id),
+          deleteSession(initRes.upload_id),
+        ]);
 
-        return await executeProxyFallback(item, file, profile, key, controller.signal, startTime);
+        return await executeProxyFallback(item, file, profile, key, controller.signal);
       }
       throw directErr;
     }
@@ -493,18 +486,12 @@ export async function resumeInterruptedUpload(
         throw directErr;
       }
       if (isCorsOrNetworkError(directErr)) {
-        try {
-          await abortUpload(manifest.profile, manifest.uploadId);
-        } catch (abortErr) {
-          console.warn(`Failed to abort multipart upload ${manifest.uploadId}:`, abortErr);
-        }
-        try {
-          await deleteSession(manifest.uploadId);
-        } catch (delErr) {
-          console.warn(`Failed to delete session ${manifest.uploadId}:`, delErr);
-        }
+        await Promise.allSettled([
+          abortUpload(manifest.profile, manifest.uploadId),
+          deleteSession(manifest.uploadId),
+        ]);
 
-        return await executeProxyFallback(item, file, manifest.profile, manifest.key, controller.signal, startTime);
+        return await executeProxyFallback(item, file, manifest.profile, manifest.key, controller.signal);
       }
       throw directErr;
     }

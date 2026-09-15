@@ -14,11 +14,9 @@
   let {
     open = false,
     onClose,
-    onclose,
   }: {
     open: boolean;
     onClose?: () => void;
-    onclose?: () => void;
   } = $props();
 
   let copied = $state(false);
@@ -57,7 +55,6 @@
     copied = false;
     checkResult = 'idle';
     onClose?.();
-    onclose?.();
   }
 
   function handleKeydown(e: KeyboardEvent) {

@@ -42,7 +42,7 @@
       <div class="flex items-center space-x-2 shrink-0 self-end sm:self-auto">
         <button
           type="button"
-          onclick={() => onConfigure?.()}
+          onclick={onConfigure}
           class="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-medium bg-amber-600 dark:bg-amber-500 hover:bg-amber-700 dark:hover:bg-amber-400 text-white dark:text-slate-950 transition shadow-sm cursor-pointer"
         >
           Configure CORS

@@ -374,6 +374,11 @@ pub async fn upload_proxy(
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string)
+        })
+        .or_else(|| {
+            mime_guess::from_path(clean_key)
+                .first_raw()
+                .map(ToString::to_string)
         });
 
     let mut options = r2kit::ObjectUploadOptions::default();
@@ -389,11 +394,9 @@ pub async fn upload_proxy(
         .map_err(map_r2_error)?;
 
     let now = Utc::now();
-    let parent_prefix = if let Some(idx) = clean_key.rfind('/') {
-        clean_key[..=idx].to_string()
-    } else {
-        String::new()
-    };
+    let parent_prefix = clean_key
+        .rfind('/')
+        .map_or(String::new(), |idx| clean_key[..=idx].to_string());
 
     let record = DbObject {
         id: None,
@@ -403,11 +406,7 @@ pub async fn upload_proxy(
         is_directory: false,
         size_bytes: content_length as i64,
         etag: put_res.etag().map(String::from),
-        content_type: resolved_content_type.or_else(|| {
-            mime_guess::from_path(clean_key)
-                .first_raw()
-                .map(ToString::to_string)
-        }),
+        content_type: resolved_content_type,
         last_modified: now,
         synced_at: now,
     };

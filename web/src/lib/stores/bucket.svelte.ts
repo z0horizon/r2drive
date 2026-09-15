@@ -126,7 +126,7 @@ export class BucketStore {
         headers: { 'Access-Control-Request-Method': 'PUT' },
       });
       if (target !== this.selectedProfile) return;
-      this.corsStatus = (res.ok || res.status === 200 || res.status === 204) ? 'healthy' : 'blocked';
+      this.corsStatus = res.ok ? 'healthy' : 'blocked';
     } catch {
       if (target !== this.selectedProfile) return;
       this.corsStatus = 'blocked';

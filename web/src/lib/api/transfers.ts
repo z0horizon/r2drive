@@ -144,10 +144,11 @@ export async function abortUpload(
  * @param profile The bucket profile name.
  */
 export async function getCorsProbeUrl(profile: string): Promise<string> {
-  const data = await apiRequest<{ probe_url: string }>(
-    `/api/buckets/${encodeURIComponent(profile)}/cors-probe`
-  );
-  return data.probe_url;
+  return (
+    await apiRequest<{ probe_url: string }>(
+      `/api/buckets/${encodeURIComponent(profile)}/cors-probe`
+    )
+  ).probe_url;
 }
 
 export interface ProxyUploadResponse {
@@ -207,21 +208,17 @@ export function uploadViaProxy(
 
     xhr.onload = () => {
       cleanup();
+      let data: any;
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {
+        data = xhr.responseText;
+      }
+
       if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          const data = JSON.parse(xhr.responseText);
-          resolve(data);
-        } catch {
-          resolve(xhr.responseText as any);
-        }
+        resolve(data);
       } else {
-        let errorMsg = `Proxy upload failed with status ${xhr.status}`;
-        try {
-          const data = JSON.parse(xhr.responseText);
-          if (data && data.error) {
-            errorMsg = data.error;
-          }
-        } catch {}
+        const errorMsg = data?.error ?? `Proxy upload failed with status ${xhr.status}`;
         reject(new Error(errorMsg));
       }
     };
