@@ -882,6 +882,44 @@ async fn test_upload_proxy_endpoint() {
         .unwrap();
     let not_found_res = app.clone().oneshot(not_found_req).await.unwrap();
     assert_eq!(not_found_res.status(), StatusCode::NOT_FOUND);
+
+    // 5. Authenticated POST with whitespace-padded Content-Length is accepted
+    let ws_cl_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/buckets/default/upload/proxy?key=test_ws_cl.txt")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .header(header::CONTENT_LENGTH, "  11 \t")
+        .body(Body::from("hello world"))
+        .unwrap();
+    let ws_cl_res = app.clone().oneshot(ws_cl_req).await.unwrap();
+    // Passes validation and attempts transfer (returns BAD_GATEWAY without real R2 creds, not BAD_REQUEST)
+    assert_ne!(ws_cl_res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_cors_probe_broadcasts_configured_policy() {
+    let transfers = r2drive::config::TransfersConfig {
+        proxy_fallback: false,
+        max_proxy_file_size: "250MB".to_string(),
+    };
+    let (app, _) = setup_test_app_with_transfers_config(transfers).await;
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/buckets/default/cors-probe")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let body_bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(body["fallback_policy"]["enabled"], false);
+    assert_eq!(
+        body["fallback_policy"]["max_payload_bytes"],
+        250 * 1024 * 1024u64
+    );
 }
 
 async fn setup_test_app_with_transfers_config(
