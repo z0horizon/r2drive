@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AuthStore, authStore } from './auth.svelte';
 import { BucketStore, bucketStore } from './bucket.svelte';
 import { UploadStore, uploadStore } from './upload.svelte';
@@ -181,6 +181,7 @@ describe('BucketStore (bucket.svelte.ts)', () => {
     ];
     store.loading = true;
     store.corsStatus = 'healthy';
+    store.serverFallbackPolicy = { enabled: false, max_payload_bytes: 1048576 };
 
     store.reset();
     expect(store.profiles).toEqual([]);
@@ -191,6 +192,10 @@ describe('BucketStore (bucket.svelte.ts)', () => {
     expect(store.loading).toBe(false);
     expect(store.error).toBeNull();
     expect(store.corsStatus).toBe('unknown');
+    expect(store.serverFallbackPolicy).toEqual({
+      enabled: true,
+      max_payload_bytes: 5 * 1024 * 1024 * 1024,
+    });
   });
 
   it('initializes corsStatus to unknown', () => {
@@ -387,12 +392,16 @@ describe('BucketStore (bucket.svelte.ts)', () => {
 
     probeResolve!({
       probe_url: 'https://probe.r2.test/bucket-a/.r2drive-probe',
-      fallback_policy: { enabled: true, max_payload_bytes: 5368709120 },
+      fallback_policy: { enabled: false, max_payload_bytes: 12345 },
     });
     await checkPromise;
 
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(store.corsStatus).toBe('unknown');
+    expect(store.serverFallbackPolicy).toEqual({
+      enabled: true,
+      max_payload_bytes: 5 * 1024 * 1024 * 1024,
+    });
   });
 });
 
@@ -415,6 +424,10 @@ describe('UploadStore (upload.svelte.ts)', () => {
     vi.restoreAllMocks();
     storageMap.clear();
     vi.stubGlobal('localStorage', mockLocalStorage);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('adds items and initializes queued state', () => {
@@ -537,5 +550,25 @@ describe('UploadStore (upload.svelte.ts)', () => {
     expect(store2.proxyFallbackPreference).toBe(true);
     expect(localStorage.getItem('r2drive_proxy_fallback_enabled')).toBe('true');
     localStorage.removeItem('r2drive_proxy_fallback_enabled');
+  });
+
+  it('handles localStorage SecurityError gracefully and defaults to true', () => {
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn(() => {
+        throw new DOMException('The operation is insecure', 'SecurityError');
+      }),
+      setItem: vi.fn(() => {
+        throw new DOMException('The operation is insecure', 'SecurityError');
+      }),
+      removeItem: vi.fn(),
+      clear: vi.fn(),
+    });
+
+    const store = new UploadStore();
+    expect(store.proxyFallbackPreference).toBe(true);
+
+    // setProxyFallbackPreference should also not throw when setItem throws
+    expect(() => store.setProxyFallbackPreference(false)).not.toThrow();
+    expect(store.proxyFallbackPreference).toBe(false);
   });
 });

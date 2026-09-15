@@ -31,8 +31,8 @@ export interface AddUploadOptions {
 export const PROXY_FALLBACK_STORAGE_KEY = 'r2drive_proxy_fallback_enabled';
 
 function loadProxyFallbackPreference(): boolean {
-  if (typeof localStorage === 'undefined') return true;
   try {
+    if (typeof localStorage === 'undefined') return true;
     const val = localStorage.getItem(PROXY_FALLBACK_STORAGE_KEY);
     return val === null ? true : val === 'true';
   } catch {
@@ -49,12 +49,12 @@ export class UploadStore {
    */
   setProxyFallbackPreference(enabled: boolean): void {
     this.proxyFallbackPreference = enabled;
-    if (typeof localStorage !== 'undefined') {
-      try {
+    try {
+      if (typeof localStorage !== 'undefined') {
         localStorage.setItem(PROXY_FALLBACK_STORAGE_KEY, String(enabled));
-      } catch {
-        // Ignore localStorage write errors
       }
+    } catch {
+      // Ignore localStorage write/quota errors
     }
   }
 

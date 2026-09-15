@@ -14,10 +14,10 @@ import { getCorsProbe, type ServerFallbackPolicy } from '../api/transfers';
 
 export type CorsStatus = 'unknown' | 'checking' | 'healthy' | 'blocked';
 
-export const DEFAULT_SERVER_FALLBACK_POLICY: ServerFallbackPolicy = {
+export const DEFAULT_SERVER_FALLBACK_POLICY: Readonly<ServerFallbackPolicy> = Object.freeze({
   enabled: true,
   max_payload_bytes: 5 * 1024 * 1024 * 1024,
-};
+});
 
 export interface Breadcrumb {
   label: string;
@@ -116,6 +116,7 @@ export class BucketStore {
     let probeUrl: string;
     try {
       const probeData = await getCorsProbe(target);
+      if (target !== this.selectedProfile) return;
       probeUrl = probeData.probe_url;
       if (probeData.fallback_policy) {
         this.serverFallbackPolicy = probeData.fallback_policy;
@@ -127,8 +128,6 @@ export class BucketStore {
       }
       return;
     }
-
-    if (target !== this.selectedProfile) return;
 
     try {
       const res = await fetch(probeUrl, {
