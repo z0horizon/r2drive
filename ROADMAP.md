@@ -43,10 +43,13 @@ A self-hosted Cloudflare R2 drive service packaged as a Docker container, provid
   - [x] Embed WebConsole assets into Rust binary via `rust-embed`
   - [x] Multi-stage `Dockerfile` producing slim all-in-one container (~45MB)
   - [x] Headless mode toggle (`--headless` flag / `R2DRIVE_HEADLESS=true`)
-- [x] **1.5 CORS Diagnostic & Resilient Upload Fallback**
+- [ ] **1.5 CORS Diagnostic & Resilient Upload Fallback**
   - [x] Proactive preflight health check probe on bucket selection with warning banner
   - [x] Smart CORS configuration guide modal with 1-click JSON copy and Cloudflare deep link
-  - [x] Automatic server-proxy streaming upload fallback (`POST /api/buckets/{profile}/upload/proxy`) when browser direct PUT is blocked by CORS
+  - [x] Streaming server-proxy upload fallback (`POST /api/buckets/{profile}/upload/proxy`) with $O(1)$ RAM
+  - [ ] Configurable administrative `FallbackPolicy` in `config.yaml` (`proxy_fallback`, `max_proxy_file_size`)
+  - [ ] Proactive policy discovery via `cors-probe` and dual-side `PayloadLimitGate` (HTTP 413)
+  - [ ] Client user `FallbackPreference` toggle in WebConsole (persisted in `localStorage`)
 
 ---
 
