@@ -19,14 +19,31 @@ pub fn parse_size_str(input: &str) -> Option<u64> {
     let (num_str, unit_str) = trimmed.split_at(split_idx);
     let num: u64 = num_str.parse().ok()?;
 
-    let unit = unit_str.trim().to_ascii_lowercase();
-    let multiplier: u64 = match unit.as_str() {
-        "" | "b" => 1,
-        "k" | "kb" | "kib" => 1024,
-        "m" | "mb" | "mib" => 1024 * 1024,
-        "g" | "gb" | "gib" => 1024 * 1024 * 1024,
-        "t" | "tb" | "tib" => 1024 * 1024 * 1024 * 1024,
-        _ => return None,
+    let unit = unit_str.trim();
+    let multiplier: u64 = if unit.is_empty() || unit.eq_ignore_ascii_case("b") {
+        1
+    } else if unit.eq_ignore_ascii_case("k")
+        || unit.eq_ignore_ascii_case("kb")
+        || unit.eq_ignore_ascii_case("kib")
+    {
+        1024
+    } else if unit.eq_ignore_ascii_case("m")
+        || unit.eq_ignore_ascii_case("mb")
+        || unit.eq_ignore_ascii_case("mib")
+    {
+        1024 * 1024
+    } else if unit.eq_ignore_ascii_case("g")
+        || unit.eq_ignore_ascii_case("gb")
+        || unit.eq_ignore_ascii_case("gib")
+    {
+        1024 * 1024 * 1024
+    } else if unit.eq_ignore_ascii_case("t")
+        || unit.eq_ignore_ascii_case("tb")
+        || unit.eq_ignore_ascii_case("tib")
+    {
+        1024 * 1024 * 1024 * 1024
+    } else {
+        return None;
     };
 
     num.checked_mul(multiplier)
@@ -473,9 +490,33 @@ transfers:
         assert_eq!(parse_size_str("500b"), Some(500));
         assert_eq!(parse_size_str("100KB"), Some(100 * 1024));
         assert_eq!(parse_size_str("100kib"), Some(100 * 1024));
+        assert_eq!(parse_size_str("500 MB"), Some(500 * 1024 * 1024));
         assert_eq!(parse_size_str("50MB"), Some(50 * 1024 * 1024));
         assert_eq!(parse_size_str("2GB"), Some(2 * 1024 * 1024 * 1024));
         assert_eq!(parse_size_str(""), None);
         assert_eq!(parse_size_str("invalid"), None);
+    }
+
+    #[test]
+    fn test_unquoted_integer_size_in_yaml() {
+        let yaml = r#"
+transfers:
+  proxy_fallback: true
+  max_proxy_file_size: 524288000
+"#;
+        let config: Config = yaml.parse().unwrap();
+        assert!(config.transfers.proxy_fallback);
+        assert_eq!(config.transfers.max_proxy_file_size, "524288000");
+        assert_eq!(config.transfers.max_payload_bytes(), 524288000);
+    }
+
+    #[test]
+    fn test_invalid_size_falls_back_to_default() {
+        let yaml = r#"
+transfers:
+  max_proxy_file_size: "not-a-size"
+"#;
+        let config: Config = yaml.parse().unwrap();
+        assert_eq!(config.transfers.max_payload_bytes(), 5 * 1024 * 1024 * 1024);
     }
 }
