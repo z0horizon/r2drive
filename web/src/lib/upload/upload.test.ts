@@ -862,6 +862,96 @@ describe('Upload Engine Execution (worker.ts)', () => {
       expect(item.progress).toBe(100);
     });
 
+    it('fails upload without proxy fallback when proxyFallbackPreference is false', async () => {
+      uploadStore.proxyFallbackPreference = false;
+      const fileSize = 100;
+      const file = new File([new Uint8Array(fileSize)], 'cors-disabled-user.txt', { type: 'text/plain' });
+
+      globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/upload/init')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ mode: 'single', upload_url: 'https://r2.direct/cors-disabled-user.txt' }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            })
+          );
+        }
+        if (url.includes('https://r2.direct/cors-disabled-user.txt')) {
+          return Promise.reject(new TypeError('Failed to fetch'));
+        }
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      MockXHR.onSend = vi.fn();
+
+      await expect(uploadFile(file, 'primary', '')).rejects.toThrow(
+        /Server proxy fallback is disabled by user settings/
+      );
+      expect(MockXHR.instances).toHaveLength(0);
+      expect(bucketStore.corsStatus).toBe('blocked');
+      uploadStore.proxyFallbackPreference = true;
+    });
+
+    it('fails upload without proxy fallback when server fallback_policy.enabled is false', async () => {
+      bucketStore.serverFallbackPolicy = { enabled: false, max_payload_bytes: 5368709120 };
+      const fileSize = 100;
+      const file = new File([new Uint8Array(fileSize)], 'cors-disabled-server.txt', { type: 'text/plain' });
+
+      globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/upload/init')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ mode: 'single', upload_url: 'https://r2.direct/cors-disabled-server.txt' }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            })
+          );
+        }
+        if (url.includes('https://r2.direct/cors-disabled-server.txt')) {
+          return Promise.reject(new TypeError('Failed to fetch'));
+        }
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      MockXHR.onSend = vi.fn();
+
+      await expect(uploadFile(file, 'primary', '')).rejects.toThrow(
+        /Server proxy fallback is disabled by server configuration/
+      );
+      expect(MockXHR.instances).toHaveLength(0);
+      expect(bucketStore.corsStatus).toBe('blocked');
+      bucketStore.serverFallbackPolicy = { enabled: true, max_payload_bytes: 5368709120 };
+    });
+
+    it('fails upload early when file size exceeds server fallback_policy.max_payload_bytes', async () => {
+      bucketStore.serverFallbackPolicy = { enabled: true, max_payload_bytes: 50 };
+      const fileSize = 100;
+      const file = new File([new Uint8Array(fileSize)], 'cors-oversized.txt', { type: 'text/plain' });
+
+      globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/upload/init')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ mode: 'single', upload_url: 'https://r2.direct/cors-oversized.txt' }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            })
+          );
+        }
+        if (url.includes('https://r2.direct/cors-oversized.txt')) {
+          return Promise.reject(new TypeError('Failed to fetch'));
+        }
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      MockXHR.onSend = vi.fn();
+
+      await expect(uploadFile(file, 'primary', '')).rejects.toThrow(
+        /exceeds server proxy upload limit/
+      );
+      expect(MockXHR.instances).toHaveLength(0);
+      expect(bucketStore.corsStatus).toBe('blocked');
+      bucketStore.serverFallbackPolicy = { enabled: true, max_payload_bytes: 5368709120 };
+    });
+
     it('uploadStore.setFallback flags fallback and clears uploadId', () => {
       const item = uploadStore.add({
         file: new Blob(['hello']),

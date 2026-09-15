@@ -242,6 +242,19 @@ async function executeProxyFallback(
   uploadStore.updateProgress(item.id, 0, 0, 0);
   bucketStore.corsStatus = 'blocked';
 
+  if (!uploadStore.proxyFallbackPreference) {
+    throw new Error('Upload blocked by CORS. Server proxy fallback is disabled by user settings.');
+  }
+  const serverPolicy = bucketStore.serverFallbackPolicy;
+  if (!serverPolicy.enabled) {
+    throw new Error('Upload blocked by CORS. Server proxy fallback is disabled by server configuration.');
+  }
+  if (file.size > serverPolicy.max_payload_bytes) {
+    throw new Error(
+      `Upload blocked by CORS. File size (${file.size} bytes) exceeds server proxy upload limit of ${serverPolicy.max_payload_bytes} bytes.`
+    );
+  }
+
   await uploadViaProxy(
     profile,
     key,

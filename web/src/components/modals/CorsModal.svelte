@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { bucketStore } from '$lib/stores/bucket.svelte';
+  import { uploadStore } from '$lib/stores/upload.svelte';
+  import { formatBytes } from '$lib/utils/format';
   import {
     AlertTriangle,
     Check,
@@ -249,6 +251,36 @@
           <span>CORS check succeeded! Bucket is ready for direct uploads.</span>
         </div>
       {/if}
+
+      <!-- Server Proxy Fallback Preference -->
+      <div class="p-3.5 rounded-xl bg-slate-950/40 border border-slate-800 space-y-2">
+        <div class="flex items-center justify-between">
+          <label class="flex items-center gap-2 select-none {bucketStore.serverFallbackPolicy.enabled ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed'}">
+            <input
+              type="checkbox"
+              checked={uploadStore.proxyFallbackPreference && bucketStore.serverFallbackPolicy.enabled}
+              disabled={!bucketStore.serverFallbackPolicy.enabled}
+              onchange={(e) => uploadStore.setProxyFallbackPreference(e.currentTarget.checked)}
+              class="rounded border-slate-700 bg-slate-800 text-indigo-600 focus:ring-0 focus:ring-offset-0 w-4 h-4 disabled:opacity-40"
+            />
+            <span class="text-xs font-semibold text-slate-200">
+              Auto-fallback via server proxy when CORS is blocked
+            </span>
+          </label>
+          {#if !bucketStore.serverFallbackPolicy.enabled}
+            <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+              Disabled on server
+            </span>
+          {/if}
+        </div>
+        <p class="text-xs text-slate-400 leading-relaxed">
+          {#if !bucketStore.serverFallbackPolicy.enabled}
+            Server proxy fallback has been disabled by the server administrator in <code class="text-slate-300">config.yaml</code>. Direct R2 uploads require valid CORS configuration.
+          {:else}
+            When direct browser upload fails due to CORS, files up to <span class="font-mono text-indigo-400 font-medium">{formatBytes(bucketStore.serverFallbackPolicy.max_payload_bytes)}</span> are transparently uploaded through the backend server.
+          {/if}
+        </p>
+      </div>
 
       <!-- Actions -->
       <div class="flex items-center justify-end gap-3 pt-2">
