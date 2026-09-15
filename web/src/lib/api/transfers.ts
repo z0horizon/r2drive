@@ -160,15 +160,6 @@ export async function getCorsProbe(profile: string): Promise<CorsProbeResponse> 
   );
 }
 
-/**
- * Fetches a presigned probe URL used to perform an OPTIONS preflight check for CORS.
- *
- * @param profile The bucket profile name.
- */
-export async function getCorsProbeUrl(profile: string): Promise<string> {
-  return (await getCorsProbe(profile)).probe_url;
-}
-
 export interface ProxyUploadResponse {
   status: string;
   key: string;

@@ -7,13 +7,13 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::time::Duration;
 
-use crate::db::models::{DbObject, MultipartSessionRecord};
+use crate::db::models::MultipartSessionRecord;
 use crate::error::AppError;
-use crate::r2::map_r2_error;
-use crate::r2::transfer::{
-    CompletedPartReceipt, DEFAULT_PART_SIZE, abort_multipart_upload, complete_multipart_upload,
-    generate_download_url, init_presigned_upload_with_content_type,
-    init_single_presigned_upload_with_content_type, resume_multipart_upload,
+use crate::r2::{
+    CompletedPartReceipt, DEFAULT_PART_SIZE, ProxyTransferEngine, abort_multipart_upload,
+    clean_object_key, complete_multipart_upload, generate_download_url,
+    init_presigned_upload_with_content_type, init_single_presigned_upload_with_content_type,
+    map_r2_error, resolve_content_type, resume_multipart_upload,
 };
 use crate::server::state::AppState;
 
@@ -301,45 +301,6 @@ pub struct ProxyUploadQuery {
     pub content_type: Option<String>,
 }
 
-pub struct SyncBody<B> {
-    inner: std::sync::Mutex<B>,
-}
-
-impl<B> SyncBody<B> {
-    pub fn new(inner: B) -> Self {
-        Self {
-            inner: std::sync::Mutex::new(inner),
-        }
-    }
-}
-
-impl<B> http_body::Body for SyncBody<B>
-where
-    B: http_body::Body + Send + Unpin + 'static,
-{
-    type Data = B::Data;
-    type Error = B::Error;
-
-    fn poll_frame(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
-        let inner = self.inner.get_mut().unwrap_or_else(|e| e.into_inner());
-        std::pin::Pin::new(inner).poll_frame(cx)
-    }
-
-    fn is_end_stream(&self) -> bool {
-        self.inner
-            .lock()
-            .map(|b| b.is_end_stream())
-            .unwrap_or(false)
-    }
-
-    fn size_hint(&self) -> http_body::SizeHint {
-        self.inner.lock().map(|b| b.size_hint()).unwrap_or_default()
-    }
-}
-
 /// Handler for POST /api/buckets/{profile}/upload/proxy?key=...&content_type=...
 pub async fn upload_proxy(
     State(state): State<AppState>,
@@ -353,20 +314,6 @@ pub async fn upload_proxy(
             "Proxy upload fallback is disabled by server configuration".to_string(),
         ));
     }
-
-    let clean_key = query.key.trim().trim_start_matches('/');
-    if clean_key.is_empty() {
-        return Err(AppError::BadRequest(
-            "Object key cannot be empty".to_string(),
-        ));
-    }
-    if clean_key.ends_with('/') {
-        return Err(AppError::BadRequest(
-            "Object key cannot end with a slash".to_string(),
-        ));
-    }
-
-    let bucket = state.r2.get_bucket(&profile)?;
 
     let content_length = headers
         .get(axum::http::header::CONTENT_LENGTH)
@@ -384,79 +331,27 @@ pub async fn upload_proxy(
         )));
     }
 
-    let resolved_content_type = query
-        .content_type
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            headers
-                .get(axum::http::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-        })
-        .or_else(|| {
-            mime_guess::from_path(clean_key)
-                .first_raw()
-                .map(ToString::to_string)
-        });
+    let bucket = state.r2.get_bucket(&profile)?;
 
-    let mut options = r2kit::ObjectUploadOptions::default();
-    if let Some(ct) = resolved_content_type.as_deref() {
-        options = options.with_content_type(ct);
-    }
+    let clean_key = clean_object_key(&query.key)?;
 
-    let byte_stream = aws_sdk_s3::primitives::ByteStream::from_body_1_x(SyncBody::new(body));
+    let resolved_content_type = resolve_content_type(
+        query.content_type.as_deref(),
+        headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        clean_key,
+    );
 
-    let put_res = bucket
-        .put_stream_with_options(clean_key, byte_stream, content_length, options)
-        .await
-        .map_err(map_r2_error)?;
-
-    let now = Utc::now();
-    let parent_prefix = clean_key
-        .rfind('/')
-        .map_or(String::new(), |idx| clean_key[..=idx].to_string());
-
-    let record = DbObject {
-        id: None,
-        bucket_profile: profile.clone(),
-        object_key: clean_key.to_string(),
-        parent_prefix,
-        is_directory: false,
-        size_bytes: content_length as i64,
-        etag: put_res.etag().map(String::from),
-        content_type: resolved_content_type,
-        last_modified: now,
-        synced_at: now,
-    };
-
-    if let Err(e) = state.db.upsert_objects(&profile, &[record]).await {
-        tracing::error!("Failed to record proxy uploaded object into metadata store: {e}");
-    }
+    let engine = ProxyTransferEngine::new(&bucket, &profile, Some(state.db.as_ref()));
+    let result = engine
+        .upload(clean_key, content_length, resolved_content_type, body)
+        .await?;
 
     Ok(Json(json!({
         "status": "uploaded",
-        "key": clean_key,
-        "size_bytes": content_length,
-        "etag": put_res.etag(),
+        "key": result.key,
+        "size_bytes": result.size_bytes,
+        "etag": result.etag,
     })))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_sync_body_streaming() {
-        let raw = b"streaming payload test";
-        let body = axum::body::Body::from(raw.to_vec());
-        let sync_body = SyncBody::new(body);
-        let byte_stream = aws_sdk_s3::primitives::ByteStream::from_body_1_x(sync_body);
-        let collected = byte_stream.collect().await.unwrap().into_bytes();
-        assert_eq!(collected.as_ref(), raw);
-    }
 }

@@ -8,7 +8,6 @@ import {
   completeUpload,
   abortUpload,
   getCorsProbe,
-  getCorsProbeUrl,
   uploadViaProxy,
 } from './transfers';
 
@@ -357,8 +356,14 @@ describe('Transfers API (transfers.ts)', () => {
     );
   });
 
-  it('getCorsProbeUrl fetches presigned probe URL', async () => {
-    const mockProbe = { probe_url: 'https://r2.example.com/.r2drive-probe?token=xyz' };
+  it('getCorsProbe fetches presigned probe URL and fallback policy', async () => {
+    const mockProbe = {
+      probe_url: 'https://r2.example.com/.r2drive-probe?token=xyz',
+      fallback_policy: {
+        enabled: true,
+        max_payload_bytes: 5368709120,
+      },
+    };
     globalThis.fetch = vi.fn().mockResolvedValue(
       new Response(JSON.stringify(mockProbe), {
         status: 200,
@@ -366,8 +371,10 @@ describe('Transfers API (transfers.ts)', () => {
       })
     );
 
-    const probeUrl = await getCorsProbeUrl('primary');
-    expect(probeUrl).toBe('https://r2.example.com/.r2drive-probe?token=xyz');
+    const res = await getCorsProbe('primary');
+    expect(res.probe_url).toBe('https://r2.example.com/.r2drive-probe?token=xyz');
+    expect(res.fallback_policy.enabled).toBe(true);
+    expect(res.fallback_policy.max_payload_bytes).toBe(5368709120);
     expect(globalThis.fetch).toHaveBeenCalledWith(
       '/api/buckets/primary/cors-probe',
       expect.anything()

@@ -272,9 +272,6 @@ async function executeProxyFallback(
     signal
   );
 
-  const elapsedSec = Math.max(0.1, (Date.now() - proxyStartTime) / 1000);
-  const speed = Math.round(file.size / elapsedSec);
-  uploadStore.updateProgress(item.id, 100, speed, file.size);
   uploadStore.markComplete(item.id);
   await bucketStore.refresh();
   return item;
@@ -332,9 +329,6 @@ export async function uploadFile(
           throw new Error(`Single upload failed: HTTP ${res.status} ${res.statusText}`);
         }
 
-        const elapsedSec = Math.max(0.1, (Date.now() - startTime) / 1000);
-        const speed = Math.round(file.size / elapsedSec);
-        uploadStore.updateProgress(item.id, 100, speed, file.size);
         uploadStore.markComplete(item.id);
         await bucketStore.refresh();
         return item;
