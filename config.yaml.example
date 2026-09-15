@@ -27,6 +27,13 @@ sync:
   # Default cache TTL in seconds before querying R2 for fresh metadata
   default_ttl_seconds: 60
 
+# Transfer and proxy fallback configuration
+transfers:
+  # Enable streaming server-proxy upload fallback when direct upload is blocked by CORS
+  proxy_fallback: true
+  # Maximum file size allowed through proxy upload (e.g. "500MB", "1GB", default: "5GB")
+  max_proxy_file_size: "500MB"
+
 # Default profile name to use when no --profile flag is specified
 default_profile: "primary"
 

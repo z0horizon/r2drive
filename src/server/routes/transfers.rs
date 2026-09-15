@@ -9,15 +9,18 @@ use std::time::Duration;
 
 use crate::db::models::MultipartSessionRecord;
 use crate::error::AppError;
-use crate::r2::transfer::{
-    CompletedPartReceipt, DEFAULT_PART_SIZE, abort_multipart_upload, complete_multipart_upload,
-    generate_download_url, init_presigned_upload_with_content_type,
-    init_single_presigned_upload_with_content_type, resume_multipart_upload,
+use crate::r2::{
+    CompletedPartReceipt, DEFAULT_PART_SIZE, ProxyTransferEngine, abort_multipart_upload,
+    clean_object_key, complete_multipart_upload, generate_download_url,
+    init_presigned_upload_with_content_type, init_single_presigned_upload_with_content_type,
+    map_r2_error, resolve_content_type, resume_multipart_upload,
 };
 use crate::server::state::AppState;
 
 const MULTIPART_THRESHOLD: u64 = DEFAULT_PART_SIZE; // 10MB (10_485_760 bytes)
 const URL_EXPIRATION: Duration = Duration::from_secs(3600); // 1 hour
+const CORS_PROBE_KEY: &str = ".r2drive-probe";
+const CORS_PROBE_EXPIRATION: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Deserialize)]
 pub struct InitUploadRequest {
@@ -267,5 +270,88 @@ pub async fn download_object(
 
     Ok(Json(json!({
         "download_url": download_url,
+    })))
+}
+
+/// Handler for GET /api/buckets/{profile}/cors-probe
+pub async fn cors_probe(
+    State(state): State<AppState>,
+    Path(profile): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let bucket = state.r2.get_bucket(&profile)?;
+    let probe_url = bucket
+        .presign_put(CORS_PROBE_KEY, 0, CORS_PROBE_EXPIRATION)
+        .await
+        .map_err(map_r2_error)?
+        .into_url_string();
+
+    Ok(Json(json!({
+        "probe_url": probe_url,
+        "fallback_policy": {
+            "enabled": state.config.transfers.proxy_fallback,
+            "max_payload_bytes": state.config.transfers.max_payload_bytes(),
+        }
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProxyUploadQuery {
+    pub key: String,
+    #[serde(default)]
+    pub content_type: Option<String>,
+}
+
+/// Handler for POST /api/buckets/{profile}/upload/proxy?key=...&content_type=...
+pub async fn upload_proxy(
+    State(state): State<AppState>,
+    Path(profile): Path<String>,
+    Query(query): Query<ProxyUploadQuery>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Body,
+) -> Result<Json<Value>, AppError> {
+    if !state.config.transfers.proxy_fallback {
+        return Err(AppError::Forbidden(
+            "Proxy upload fallback is disabled by server configuration".to_string(),
+        ));
+    }
+
+    let content_length = headers
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .and_then(|v| v.parse::<u64>().ok())
+        .ok_or_else(|| {
+            AppError::BadRequest("Content-Length header required for proxy upload".to_string())
+        })?;
+
+    let max_bytes = state.config.transfers.max_payload_bytes();
+    if content_length > max_bytes {
+        return Err(AppError::PayloadTooLarge(format!(
+            "File size ({content_length} bytes) exceeds maximum proxy upload size limit of {max_bytes} bytes",
+        )));
+    }
+
+    let bucket = state.r2.get_bucket(&profile)?;
+
+    let clean_key = clean_object_key(&query.key)?;
+
+    let resolved_content_type = resolve_content_type(
+        query.content_type.as_deref(),
+        headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        clean_key,
+    );
+
+    let engine = ProxyTransferEngine::new(&bucket, &profile, Some(state.db.as_ref()));
+    let result = engine
+        .upload(clean_key, content_length, resolved_content_type, body)
+        .await?;
+
+    Ok(Json(json!({
+        "status": "uploaded",
+        "key": result.key,
+        "size_bytes": result.size_bytes,
+        "etag": result.etag,
     })))
 }

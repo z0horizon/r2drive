@@ -17,6 +17,7 @@ export interface UploadItem {
   uploadId?: string; // Multipart upload session ID when applicable
   totalBytes: number;
   uploadedBytes: number;
+  fallback?: boolean;
 }
 
 export interface AddUploadOptions {
@@ -27,8 +28,35 @@ export interface AddUploadOptions {
   name?: string;
 }
 
+export const PROXY_FALLBACK_STORAGE_KEY = 'r2drive_proxy_fallback_enabled';
+
+function loadProxyFallbackPreference(): boolean {
+  try {
+    if (typeof localStorage === 'undefined') return true;
+    const val = localStorage.getItem(PROXY_FALLBACK_STORAGE_KEY);
+    return val === null ? true : val === 'true';
+  } catch {
+    return true;
+  }
+}
+
 export class UploadStore {
   items = $state<UploadItem[]>([]);
+  proxyFallbackPreference = $state<boolean>(loadProxyFallbackPreference());
+
+  /**
+   * Sets user fallback preference and persists to localStorage.
+   */
+  setProxyFallbackPreference(enabled: boolean): void {
+    this.proxyFallbackPreference = enabled;
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(PROXY_FALLBACK_STORAGE_KEY, String(enabled));
+      }
+    } catch {
+      // Ignore localStorage write/quota errors
+    }
+  }
 
   /**
    * Returns list of currently active or queued uploads.
@@ -177,6 +205,17 @@ export class UploadStore {
     const item = this.items.find((i) => i.id === id);
     if (item) {
       item.uploadId = uploadId;
+    }
+  }
+
+  /**
+   * Marks a transfer as using server proxy fallback and clears multipart upload session ID.
+   */
+  setFallback(id: string): void {
+    const item = this.items.find((i) => i.id === id);
+    if (item) {
+      item.fallback = true;
+      item.uploadId = undefined; // clear multipart session id so abort doesn't 404
     }
   }
 

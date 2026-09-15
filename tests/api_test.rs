@@ -11,6 +11,33 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tower::ServiceExt;
 
+async fn setup_test_app_with_profiles(
+    headless: bool,
+    profiles: HashMap<String, BucketProfile>,
+    default_profile: &str,
+) -> (axum::Router, AppState) {
+    let config = Config {
+        server: r2drive::config::ServerConfig {
+            admin_password: "super-secret-password".to_string(),
+            session_ttl_hours: 24,
+            headless,
+            ..Default::default()
+        },
+        default_profile: default_profile.to_string(),
+        profiles,
+        ..Default::default()
+    };
+
+    let db = create_metadata_store("sqlite::memory:").await.unwrap();
+    let r2 = Arc::new(R2Manager::new(&config).unwrap());
+    let config = Arc::new(config);
+
+    let state = AppState { config, db, r2 };
+    let app = create_router(state.clone());
+
+    (app, state)
+}
+
 async fn setup_test_app_with_headless(headless: bool) -> (axum::Router, AppState) {
     let mut profiles = HashMap::new();
     profiles.insert(
@@ -34,26 +61,7 @@ async fn setup_test_app_with_headless(headless: bool) -> (axum::Router, AppState
         },
     );
 
-    let config = Config {
-        server: r2drive::config::ServerConfig {
-            admin_password: "super-secret-password".to_string(),
-            session_ttl_hours: 24,
-            headless,
-            ..Default::default()
-        },
-        default_profile: "primary".to_string(),
-        profiles,
-        ..Default::default()
-    };
-
-    let db = create_metadata_store("sqlite::memory:").await.unwrap();
-    let r2 = Arc::new(R2Manager::new(&config).unwrap());
-    let config = Arc::new(config);
-
-    let state = AppState { config, db, r2 };
-    let app = create_router(state.clone());
-
-    (app, state)
+    setup_test_app_with_profiles(headless, profiles, "primary").await
 }
 
 async fn setup_test_app() -> (axum::Router, AppState) {
@@ -74,6 +82,8 @@ async fn test_unauthenticated_requests_return_401() {
         ("POST", "/api/buckets/primary/upload/complete"),
         ("POST", "/api/buckets/primary/upload/abort"),
         ("GET", "/api/buckets/primary/download?key=test.txt"),
+        ("GET", "/api/buckets/primary/cors-probe"),
+        ("POST", "/api/buckets/primary/upload/proxy?key=test.txt"),
     ];
 
     for (method, uri) in endpoints {
@@ -705,4 +715,319 @@ async fn test_headless_mode_unknown_route_returns_404() {
     let body_bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
     let body = String::from_utf8_lossy(&body_bytes);
     assert!(body.contains("WebConsole disabled in headless mode"));
+}
+
+#[tokio::test]
+async fn test_cors_probe_endpoint() {
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "default".to_string(),
+        BucketProfile {
+            account_id: "0123456789abcdef0123456789abcdef".to_string(),
+            access_key_id: "test-access-key".to_string(),
+            secret_access_key: "test-secret-key".to_string(),
+            bucket_name: "test-bucket".to_string(),
+            public_url: None,
+        },
+    );
+    let (app, _) = setup_test_app_with_profiles(false, profiles, "default").await;
+
+    // Unauthenticated GET /api/buckets/default/cors-probe returns 401 Unauthorized
+    let unauth_req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/buckets/default/cors-probe")
+        .body(Body::empty())
+        .unwrap();
+    let unauth_res = app.clone().oneshot(unauth_req).await.unwrap();
+    assert_eq!(unauth_res.status(), StatusCode::UNAUTHORIZED);
+
+    // Authenticated GET /api/buckets/nonexistent/cors-probe returns 404 NotFound
+    let auth_nonexistent_req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/buckets/nonexistent/cors-probe")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .body(Body::empty())
+        .unwrap();
+    let auth_nonexistent_res = app.clone().oneshot(auth_nonexistent_req).await.unwrap();
+    assert_eq!(auth_nonexistent_res.status(), StatusCode::NOT_FOUND);
+
+    // Authenticated GET /api/buckets/default/cors-probe returns 200 OK with JSON {"probe_url": "..."} containing /.r2drive-probe
+    let auth_probe_req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/buckets/default/cors-probe")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .body(Body::empty())
+        .unwrap();
+    let auth_probe_res = app.clone().oneshot(auth_probe_req).await.unwrap();
+    assert_eq!(auth_probe_res.status(), StatusCode::OK);
+
+    let body_bytes = to_bytes(auth_probe_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&body_bytes).unwrap();
+    let probe_url = body["probe_url"]
+        .as_str()
+        .expect("probe_url field in response");
+    assert!(
+        probe_url.contains(".r2drive-probe"),
+        "probe_url should contain .r2drive-probe"
+    );
+    assert!(
+        probe_url.contains("X-Amz-Signature="),
+        "probe_url should be a signed URL"
+    );
+
+    let fallback_policy = &body["fallback_policy"];
+    assert_eq!(fallback_policy["enabled"], true);
+    assert_eq!(
+        fallback_policy["max_payload_bytes"],
+        5 * 1024 * 1024 * 1024u64
+    );
+}
+
+#[tokio::test]
+async fn test_upload_proxy_endpoint() {
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "default".to_string(),
+        BucketProfile {
+            account_id: "0123456789abcdef0123456789abcdef".to_string(),
+            access_key_id: "test-access-key".to_string(),
+            secret_access_key: "test-secret-key".to_string(),
+            bucket_name: "test-bucket".to_string(),
+            public_url: None,
+        },
+    );
+    let (app, _) = setup_test_app_with_profiles(false, profiles, "default").await;
+
+    // 1. Unauthenticated POST /api/buckets/default/upload/proxy?key=hello.txt returns 401 Unauthorized
+    let unauth_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/buckets/default/upload/proxy?key=hello.txt")
+        .header(header::CONTENT_LENGTH, "11")
+        .body(Body::from("hello world"))
+        .unwrap();
+    let unauth_res = app.clone().oneshot(unauth_req).await.unwrap();
+    assert_eq!(unauth_res.status(), StatusCode::UNAUTHORIZED);
+
+    // 2. Authenticated POST with empty key returns 400 BadRequest ("Object key cannot be empty")
+    let empty_key_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/buckets/default/upload/proxy?key=")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .header(header::CONTENT_LENGTH, "11")
+        .body(Body::from("hello world"))
+        .unwrap();
+    let empty_key_res = app.clone().oneshot(empty_key_req).await.unwrap();
+    assert_eq!(empty_key_res.status(), StatusCode::BAD_REQUEST);
+    let body_bytes = to_bytes(empty_key_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(body["error"], "Object key cannot be empty");
+
+    // Also test whitespace key returns 400 BadRequest
+    let ws_key_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/buckets/default/upload/proxy?key=%20%20")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .header(header::CONTENT_LENGTH, "11")
+        .body(Body::from("hello world"))
+        .unwrap();
+    let ws_key_res = app.clone().oneshot(ws_key_req).await.unwrap();
+    assert_eq!(ws_key_res.status(), StatusCode::BAD_REQUEST);
+    let ws_bytes = to_bytes(ws_key_res.into_body(), usize::MAX).await.unwrap();
+    let ws_body: Value = serde_json::from_slice(&ws_bytes).unwrap();
+    assert_eq!(ws_body["error"], "Object key cannot be empty");
+
+    // Also test slash-only key returns 400 BadRequest
+    let slash_key_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/buckets/default/upload/proxy?key=///")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .header(header::CONTENT_LENGTH, "11")
+        .body(Body::from("hello world"))
+        .unwrap();
+    let slash_key_res = app.clone().oneshot(slash_key_req).await.unwrap();
+    assert_eq!(slash_key_res.status(), StatusCode::BAD_REQUEST);
+    let slash_bytes = to_bytes(slash_key_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let slash_body: Value = serde_json::from_slice(&slash_bytes).unwrap();
+    assert_eq!(slash_body["error"], "Object key cannot be empty");
+
+    // 3. Authenticated POST with missing Content-Length header returns 400 BadRequest
+    let no_cl_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/buckets/default/upload/proxy?key=hello.txt")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .body(Body::from("hello world"))
+        .unwrap();
+    let no_cl_res = app.clone().oneshot(no_cl_req).await.unwrap();
+    assert_eq!(no_cl_res.status(), StatusCode::BAD_REQUEST);
+    let no_cl_bytes = to_bytes(no_cl_res.into_body(), usize::MAX).await.unwrap();
+    let no_cl_body: Value = serde_json::from_slice(&no_cl_bytes).unwrap();
+    assert_eq!(
+        no_cl_body["error"],
+        "Content-Length header required for proxy upload"
+    );
+
+    // 3b. Authenticated POST with trailing slash key returns 400 BadRequest
+    let trailing_slash_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/buckets/default/upload/proxy?key=folder/")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .header(header::CONTENT_LENGTH, "11")
+        .body(Body::from("hello world"))
+        .unwrap();
+    let trailing_slash_res = app.clone().oneshot(trailing_slash_req).await.unwrap();
+    assert_eq!(trailing_slash_res.status(), StatusCode::BAD_REQUEST);
+    let trailing_slash_bytes = to_bytes(trailing_slash_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let trailing_slash_body: Value = serde_json::from_slice(&trailing_slash_bytes).unwrap();
+    assert_eq!(
+        trailing_slash_body["error"],
+        "Object key cannot end with a slash"
+    );
+
+    // 4. Authenticated POST with missing/invalid profile returns 404 NotFound
+    let not_found_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/buckets/nonexistent/upload/proxy?key=hello.txt")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .header(header::CONTENT_LENGTH, "11")
+        .body(Body::from("hello world"))
+        .unwrap();
+    let not_found_res = app.clone().oneshot(not_found_req).await.unwrap();
+    assert_eq!(not_found_res.status(), StatusCode::NOT_FOUND);
+
+    // 5. Authenticated POST with whitespace-padded Content-Length is accepted
+    let ws_cl_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/buckets/default/upload/proxy?key=test_ws_cl.txt")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .header(header::CONTENT_LENGTH, "  11 \t")
+        .body(Body::from("hello world"))
+        .unwrap();
+    let ws_cl_res = app.clone().oneshot(ws_cl_req).await.unwrap();
+    // Passes validation and attempts transfer (returns BAD_GATEWAY without real R2 creds, not BAD_REQUEST)
+    assert_ne!(ws_cl_res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_cors_probe_broadcasts_configured_policy() {
+    let transfers = r2drive::config::TransfersConfig {
+        proxy_fallback: false,
+        max_proxy_file_size: "250MB".to_string(),
+    };
+    let (app, _) = setup_test_app_with_transfers_config(transfers).await;
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/buckets/default/cors-probe")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let body_bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(body["fallback_policy"]["enabled"], false);
+    assert_eq!(
+        body["fallback_policy"]["max_payload_bytes"],
+        250 * 1024 * 1024u64
+    );
+}
+
+async fn setup_test_app_with_transfers_config(
+    transfers: r2drive::config::TransfersConfig,
+) -> (axum::Router, AppState) {
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "default".to_string(),
+        BucketProfile {
+            account_id: "0123456789abcdef0123456789abcdef".to_string(),
+            access_key_id: "test-access-key".to_string(),
+            secret_access_key: "test-secret-key".to_string(),
+            bucket_name: "test-bucket".to_string(),
+            public_url: None,
+        },
+    );
+    let config = Config {
+        server: r2drive::config::ServerConfig {
+            admin_password: "super-secret-password".to_string(),
+            session_ttl_hours: 24,
+            headless: false,
+            ..Default::default()
+        },
+        default_profile: "default".to_string(),
+        profiles,
+        transfers,
+        ..Default::default()
+    };
+
+    let db = create_metadata_store("sqlite::memory:").await.unwrap();
+    let r2 = Arc::new(R2Manager::new(&config).unwrap());
+    let config = Arc::new(config);
+
+    let state = AppState { config, db, r2 };
+    let app = create_router(state.clone());
+
+    (app, state)
+}
+
+#[tokio::test]
+async fn test_upload_proxy_fallback_disabled_returns_403() {
+    let transfers = r2drive::config::TransfersConfig {
+        proxy_fallback: false,
+        max_proxy_file_size: "5GB".to_string(),
+    };
+    let (app, _) = setup_test_app_with_transfers_config(transfers).await;
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/buckets/default/upload/proxy?key=test.txt")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .header(header::CONTENT_LENGTH, "11")
+        .body(Body::from("hello world"))
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        body["error"],
+        "Proxy upload fallback is disabled by server configuration"
+    );
+}
+
+#[tokio::test]
+async fn test_upload_proxy_payload_too_large_returns_413() {
+    let transfers = r2drive::config::TransfersConfig {
+        proxy_fallback: true,
+        max_proxy_file_size: "10B".to_string(),
+    };
+    let (app, _) = setup_test_app_with_transfers_config(transfers).await;
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/buckets/default/upload/proxy?key=test.txt")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .header(header::CONTENT_LENGTH, "11")
+        .body(Body::from("hello world"))
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("exceeds maximum proxy upload size limit")
+    );
 }

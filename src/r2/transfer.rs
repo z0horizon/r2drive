@@ -328,6 +328,176 @@ pub async fn generate_download_url(
     }
 }
 
+pub struct SyncBody<B> {
+    inner: std::sync::Mutex<B>,
+}
+
+impl<B> SyncBody<B> {
+    pub fn new(inner: B) -> Self {
+        Self {
+            inner: std::sync::Mutex::new(inner),
+        }
+    }
+}
+
+impl<B> http_body::Body for SyncBody<B>
+where
+    B: http_body::Body + Send + Unpin + 'static,
+{
+    type Data = B::Data;
+    type Error = B::Error;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        let inner = self.inner.get_mut().unwrap_or_else(|e| e.into_inner());
+        std::pin::Pin::new(inner).poll_frame(cx)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner
+            .lock()
+            .map(|b| b.is_end_stream())
+            .unwrap_or(false)
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        self.inner.lock().map(|b| b.size_hint()).unwrap_or_default()
+    }
+}
+
+/// Validates and trims an object key for transfer operations.
+pub fn clean_object_key(key: &str) -> Result<&str, AppError> {
+    let clean = key.trim().trim_start_matches('/');
+    if clean.is_empty() {
+        return Err(AppError::BadRequest(
+            "Object key cannot be empty".to_string(),
+        ));
+    }
+    if clean.ends_with('/') {
+        return Err(AppError::BadRequest(
+            "Object key cannot end with a slash".to_string(),
+        ));
+    }
+    Ok(clean)
+}
+
+/// Resolves the effective content type in precedence order:
+/// 1. Query parameter `query_ct` (trimmed, non-empty)
+/// 2. Request header `header_ct` (trimmed, non-empty)
+/// 3. Inferred from object key extension via `mime_guess`
+pub fn resolve_content_type(
+    query_ct: Option<&str>,
+    header_ct: Option<&str>,
+    key: &str,
+) -> Option<String> {
+    query_ct
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            header_ct
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            mime_guess::from_path(key)
+                .first_raw()
+                .map(ToString::to_string)
+        })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProxyUploadResult {
+    pub key: String,
+    pub size_bytes: u64,
+    pub etag: Option<String>,
+    pub content_type: Option<String>,
+}
+
+pub struct ProxyTransferEngine<'a> {
+    pub bucket: &'a r2kit::Bucket,
+    pub profile: &'a str,
+    pub db: Option<&'a (dyn crate::db::MetadataRepo + 'static)>,
+}
+
+impl<'a> ProxyTransferEngine<'a> {
+    pub fn new(
+        bucket: &'a r2kit::Bucket,
+        profile: &'a str,
+        db: Option<&'a (dyn crate::db::MetadataRepo + 'static)>,
+    ) -> Self {
+        Self {
+            bucket,
+            profile,
+            db,
+        }
+    }
+
+    pub async fn upload<B>(
+        &self,
+        key: &str,
+        content_length: u64,
+        content_type: Option<String>,
+        body: B,
+    ) -> Result<ProxyUploadResult, AppError>
+    where
+        B: http_body::Body<Data = axum::body::Bytes> + Send + Unpin + 'static,
+        B::Data: Send,
+        B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
+        let clean_key = clean_object_key(key)?;
+
+        let mut options = r2kit::ObjectUploadOptions::default();
+        if let Some(ref ct) = content_type {
+            options = options.with_content_type(ct);
+        }
+
+        let byte_stream = aws_sdk_s3::primitives::ByteStream::from_body_1_x(SyncBody::new(body));
+
+        let put_res = self
+            .bucket
+            .put_stream_with_options(clean_key, byte_stream, content_length, options)
+            .await
+            .map_err(map_r2_error)?;
+
+        let etag = put_res.etag().map(String::from);
+
+        if let Some(db) = self.db {
+            let now = chrono::Utc::now();
+            let parent_prefix = clean_key
+                .rfind('/')
+                .map_or(String::new(), |idx| clean_key[..=idx].to_string());
+
+            let record = crate::db::models::DbObject {
+                id: None,
+                bucket_profile: self.profile.to_string(),
+                object_key: clean_key.to_string(),
+                parent_prefix,
+                is_directory: false,
+                size_bytes: content_length as i64,
+                etag: etag.clone(),
+                content_type: content_type.clone(),
+                last_modified: now,
+                synced_at: now,
+            };
+
+            if let Err(e) = db.upsert_objects(self.profile, &[record]).await {
+                tracing::error!("Failed to record proxy uploaded object into metadata store: {e}");
+            }
+        }
+
+        Ok(ProxyUploadResult {
+            key: clean_key.to_string(),
+            size_bytes: content_length,
+            etag,
+            content_type,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -681,5 +851,146 @@ mod tests {
         assert!(url.contains("test-bucket"));
         assert!(url.contains("/image.png"));
         assert!(url.contains("X-Amz-Signature="));
+    }
+
+    #[test]
+    fn test_clean_object_key() {
+        // empty or whitespace
+        assert!(matches!(clean_object_key(""), Err(AppError::BadRequest(_))));
+        assert!(matches!(
+            clean_object_key("   "),
+            Err(AppError::BadRequest(_))
+        ));
+        assert!(matches!(
+            clean_object_key("\t\n"),
+            Err(AppError::BadRequest(_))
+        ));
+
+        // slash only
+        assert!(matches!(
+            clean_object_key("/"),
+            Err(AppError::BadRequest(_))
+        ));
+        assert!(matches!(
+            clean_object_key("///"),
+            Err(AppError::BadRequest(_))
+        ));
+        assert!(matches!(
+            clean_object_key("  ///  "),
+            Err(AppError::BadRequest(_))
+        ));
+
+        // trailing slash
+        let err_trailing = clean_object_key("folder/").unwrap_err();
+        assert!(matches!(err_trailing, AppError::BadRequest(_)));
+        assert_eq!(
+            err_trailing.to_string(),
+            "Invalid request: Object key cannot end with a slash"
+        );
+
+        let err_trailing_leading = clean_object_key("/folder/sub/").unwrap_err();
+        assert!(matches!(err_trailing_leading, AppError::BadRequest(_)));
+
+        // leading slash trimmed
+        assert_eq!(clean_object_key("/file.txt").unwrap(), "file.txt");
+        assert_eq!(clean_object_key("///file.txt").unwrap(), "file.txt");
+        assert_eq!(
+            clean_object_key("  /path/to/file.txt  ").unwrap(),
+            "path/to/file.txt"
+        );
+
+        // nested path
+        assert_eq!(
+            clean_object_key("nested/dir/doc.pdf").unwrap(),
+            "nested/dir/doc.pdf"
+        );
+        assert_eq!(
+            clean_object_key("/nested/dir/doc.pdf").unwrap(),
+            "nested/dir/doc.pdf"
+        );
+    }
+
+    #[test]
+    fn test_resolve_content_type() {
+        // query precedence
+        assert_eq!(
+            resolve_content_type(Some("application/json"), Some("text/plain"), "doc.txt"),
+            Some("application/json".to_string())
+        );
+        assert_eq!(
+            resolve_content_type(Some("  application/json  "), Some("text/plain"), "doc.txt"),
+            Some("application/json".to_string())
+        );
+
+        // query empty / whitespace falls back to header
+        assert_eq!(
+            resolve_content_type(Some("   "), Some("text/plain"), "doc.txt"),
+            Some("text/plain".to_string())
+        );
+        assert_eq!(
+            resolve_content_type(Some(""), Some("text/plain"), "doc.txt"),
+            Some("text/plain".to_string())
+        );
+
+        // header fallback
+        assert_eq!(
+            resolve_content_type(None, Some("text/plain"), "image.png"),
+            Some("text/plain".to_string())
+        );
+        assert_eq!(
+            resolve_content_type(None, Some("  text/html  "), "image.png"),
+            Some("text/html".to_string())
+        );
+
+        // extension fallback
+        assert_eq!(
+            resolve_content_type(None, None, "image.png"),
+            Some("image/png".to_string())
+        );
+        assert_eq!(
+            resolve_content_type(Some(""), Some("   "), "image.png"),
+            Some("image/png".to_string())
+        );
+        assert_eq!(
+            resolve_content_type(None, None, "archive.tar.gz"),
+            Some("application/gzip".to_string())
+        );
+
+        // unknown extension
+        assert_eq!(
+            resolve_content_type(None, None, "unknown_file.custom_ext_12345"),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sync_body_streaming() {
+        let raw = b"streaming payload test";
+        let body = axum::body::Body::from(raw.to_vec());
+        let sync_body = SyncBody::new(body);
+        let byte_stream = aws_sdk_s3::primitives::ByteStream::from_body_1_x(sync_body);
+        let collected = byte_stream.collect().await.unwrap().into_bytes();
+        assert_eq!(collected.as_ref(), raw);
+    }
+
+    #[tokio::test]
+    async fn test_proxy_transfer_engine_key_validation() {
+        let bucket = test_bucket();
+        let engine = ProxyTransferEngine::new(&bucket, "default", None);
+        let body = axum::body::Body::from(b"test".to_vec());
+        let err = engine.upload("", 4, None, body).await.unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+        assert_eq!(
+            err.to_string(),
+            "Invalid request: Object key cannot be empty"
+        );
+
+        let body2 = axum::body::Body::from(b"test".to_vec());
+        let err2 = engine.upload("folder/", 4, None, body2).await.unwrap_err();
+        assert!(matches!(err2, AppError::BadRequest(_)));
+        assert_eq!(
+            err2.to_string(),
+            "Invalid request: Object key cannot end with a slash"
+        );
     }
 }

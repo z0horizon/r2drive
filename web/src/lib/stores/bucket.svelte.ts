@@ -10,6 +10,14 @@ import {
   type ObjectItem,
   type PrefixListing,
 } from '../api/objects';
+import { getCorsProbe, type ServerFallbackPolicy } from '../api/transfers';
+
+export type CorsStatus = 'unknown' | 'checking' | 'healthy' | 'blocked';
+
+export const DEFAULT_SERVER_FALLBACK_POLICY: Readonly<ServerFallbackPolicy> = Object.freeze({
+  enabled: true,
+  max_payload_bytes: 5 * 1024 * 1024 * 1024,
+});
 
 export interface Breadcrumb {
   label: string;
@@ -24,6 +32,8 @@ export class BucketStore {
   objects = $state<ObjectItem[]>([]);
   loading = $state<boolean>(false);
   error = $state<string | null>(null);
+  corsStatus = $state<CorsStatus>('unknown');
+  serverFallbackPolicy = $state<ServerFallbackPolicy>({ ...DEFAULT_SERVER_FALLBACK_POLICY });
 
   /**
    * Reactive breadcrumb hierarchy derived from current prefix.
@@ -63,6 +73,8 @@ export class BucketStore {
       }
 
       if (this.selectedProfile) {
+        this.corsStatus = 'unknown';
+        void this.checkCors(this.selectedProfile);
         await this.fetchObjects(false);
       }
     } catch (err) {
@@ -78,7 +90,56 @@ export class BucketStore {
   async setProfile(profile: string): Promise<void> {
     this.selectedProfile = profile;
     this.currentPrefix = '';
+    this.corsStatus = 'unknown';
+    void this.checkCors(profile);
     await this.fetchObjects(false);
+  }
+
+  /**
+   * Performs an asynchronous, non-blocking OPTIONS preflight check against R2
+   * using a presigned probe URL to verify CORS configuration.
+   *
+   * @param profile Optional bucket profile name (defaults to currently selected profile).
+   * @param force When true, bypasses status caching and forces a new probe.
+   */
+  async checkCors(profile?: string, force = false): Promise<void> {
+    const target = profile ?? this.selectedProfile;
+    if (!target) {
+      return;
+    }
+    if (!force && this.corsStatus !== 'unknown') {
+      return;
+    }
+
+    this.corsStatus = 'checking';
+
+    let probeUrl: string;
+    try {
+      const probeData = await getCorsProbe(target);
+      if (target !== this.selectedProfile) return;
+      probeUrl = probeData.probe_url;
+      if (probeData.fallback_policy) {
+        this.serverFallbackPolicy = probeData.fallback_policy;
+      }
+    } catch {
+      // Backend API error (unauthorized/server error) should not trigger a false-positive CORS blocked banner.
+      if (target === this.selectedProfile) {
+        this.corsStatus = 'unknown';
+      }
+      return;
+    }
+
+    try {
+      const res = await fetch(probeUrl, {
+        method: 'OPTIONS',
+        headers: { 'Access-Control-Request-Method': 'PUT' },
+      });
+      if (target !== this.selectedProfile) return;
+      this.corsStatus = res.ok ? 'healthy' : 'blocked';
+    } catch {
+      if (target !== this.selectedProfile) return;
+      this.corsStatus = 'blocked';
+    }
   }
 
   /**
@@ -162,6 +223,8 @@ export class BucketStore {
     this.objects = [];
     this.loading = false;
     this.error = null;
+    this.corsStatus = 'unknown';
+    this.serverFallbackPolicy = { ...DEFAULT_SERVER_FALLBACK_POLICY };
   }
 }
 

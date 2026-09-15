@@ -6,10 +6,11 @@ pub mod transfer;
 pub use client::R2Manager;
 pub use transfer::{
     ChunkRange, CompletedPartReceipt, DEFAULT_PART_SIZE, MAX_PARTS, MIN_PART_SIZE, PresignedPart,
-    PresignedUploadPlan, ResumedUploadPlan, abort_multipart_upload, calculate_chunk_ranges,
-    calculate_part_count, complete_multipart_upload, generate_download_url, init_presigned_upload,
+    PresignedUploadPlan, ProxyTransferEngine, ProxyUploadResult, ResumedUploadPlan, SyncBody,
+    abort_multipart_upload, calculate_chunk_ranges, calculate_part_count, clean_object_key,
+    complete_multipart_upload, generate_download_url, init_presigned_upload,
     init_presigned_upload_with_content_type, init_single_presigned_upload,
-    init_single_presigned_upload_with_content_type, resume_multipart_upload,
+    init_single_presigned_upload_with_content_type, resolve_content_type, resume_multipart_upload,
 };
 
 /// Maps an `r2kit::Error` to domain `AppError` respecting HTTP semantic status codes:

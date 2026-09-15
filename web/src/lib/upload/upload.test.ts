@@ -6,6 +6,7 @@ import {
   cancelUpload,
   uploadFile,
   resumeInterruptedUpload,
+  isCorsOrNetworkError,
   PART_SIZE,
   MAX_CONCURRENCY,
   MAX_RETRIES,
@@ -181,7 +182,7 @@ describe('Upload Part Retry and Backoff (uploadPartWithRetry)', () => {
     globalThis.fetch = vi.fn().mockImplementation(() => {
       callCount++;
       if (callCount === 1) {
-        return Promise.reject(new TypeError('Failed to fetch'));
+        return Promise.reject(new Error('connection reset by peer'));
       }
       return Promise.resolve(new Response(null, { status: 200, headers: { ETag: '"recovered-after-net-err"' } }));
     });
@@ -249,6 +250,43 @@ describe('Upload Part Retry and Backoff (uploadPartWithRetry)', () => {
     ).rejects.toThrow(/HTTP 403: Forbidden/);
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws immediately on CORS / fetch failure error without retrying', async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+
+    const blob = new Blob(['data']);
+    await expect(
+      uploadPartWithRetry('https://r2.example.com/part1', blob, undefined, 5, 10)
+    ).rejects.toThrow(/Failed to fetch/);
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('CORS and Network Error Detection (isCorsOrNetworkError)', () => {
+  it('detects standard browser Failed to fetch error', () => {
+    expect(isCorsOrNetworkError(new TypeError('Failed to fetch'))).toBe(true);
+  });
+
+  it('detects Node.js and Undici fetch failed error', () => {
+    expect(isCorsOrNetworkError(new TypeError('fetch failed'))).toBe(true);
+  });
+
+  it('detects generic NetworkError and CORS messages', () => {
+    expect(isCorsOrNetworkError(new Error('NetworkError when attempting to fetch resource.'))).toBe(true);
+    expect(isCorsOrNetworkError(new Error('Cross-Origin Request Blocked: The Same Origin Policy disallows reading the remote resource.'))).toBe(true);
+  });
+
+  it('ignores user aborts and DOMException AbortError', () => {
+    expect(isCorsOrNetworkError(new DOMException('Upload aborted by user', 'AbortError'))).toBe(false);
+    expect(isCorsOrNetworkError(new Error('The user aborted a request.'))).toBe(false);
+  });
+
+  it('returns false for unrelated application errors', () => {
+    expect(isCorsOrNetworkError(new Error('Invalid JSON response'))).toBe(false);
+    expect(isCorsOrNetworkError(null)).toBe(false);
+    expect(isCorsOrNetworkError(undefined)).toBe(false);
   });
 });
 
@@ -654,5 +692,354 @@ describe('Upload Engine Execution (worker.ts)', () => {
     expect(item).toBeDefined();
     expect(item.status).toBe('failed');
     expect(item.error).toContain('HTTP 403: Forbidden');
+  });
+
+  describe('WebConsole Resilient Upload Fallback & Seamless Retry', () => {
+    class MockXHR {
+      static instances: MockXHR[] = [];
+      static onSend: ((xhr: MockXHR, body?: any) => void) | null = null;
+
+      open = vi.fn();
+      setRequestHeader = vi.fn();
+      send = vi.fn((body?: any) => {
+        if (MockXHR.onSend) {
+          MockXHR.onSend(this, body);
+        }
+      });
+      abort = vi.fn(() => {
+        if (this.onabort) this.onabort();
+      });
+      withCredentials = false;
+      status = 200;
+      responseText = '';
+      upload = {
+        onprogress: null as ((e: any) => void) | null,
+      };
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+
+      constructor() {
+        MockXHR.instances.push(this);
+      }
+    }
+
+    beforeEach(() => {
+      MockXHR.instances = [];
+      MockXHR.onSend = null;
+      (globalThis as any).XMLHttpRequest = MockXHR;
+      uploadStore.clearAll();
+      uploadStore.proxyFallbackPreference = true;
+      bucketStore.corsStatus = 'unknown';
+      bucketStore.serverFallbackPolicy = { enabled: true, max_payload_bytes: 5368709120 };
+    });
+
+    afterEach(() => {
+      delete (globalThis as any).XMLHttpRequest;
+      uploadStore.proxyFallbackPreference = true;
+      bucketStore.serverFallbackPolicy = { enabled: true, max_payload_bytes: 5368709120 };
+    });
+
+    it('falls back to uploadViaProxy when single upload direct PUT throws CORS TypeError', async () => {
+      const fileSize = 1024; // 1KB < 10MB -> single PUT
+      const file = new File([new Uint8Array(fileSize)], 'cors-file.txt', { type: 'text/plain' });
+      const refreshSpy = vi.spyOn(bucketStore, 'refresh').mockResolvedValue();
+
+      globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/upload/init')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                mode: 'single',
+                upload_url: 'https://r2.direct/cors-file.txt',
+              }),
+              { status: 200, headers: { 'Content-Type': 'application/json' } }
+            )
+          );
+        }
+
+        if (url.includes('https://r2.direct/cors-file.txt')) {
+          // Browser throws TypeError: Failed to fetch on CORS block
+          return Promise.reject(new TypeError('Failed to fetch'));
+        }
+
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      MockXHR.onSend = (xhr) => {
+        xhr.upload?.onprogress?.({ lengthComputable: true, loaded: fileSize, total: fileSize });
+        xhr.status = 200;
+        xhr.responseText = JSON.stringify({
+          status: 'uploaded',
+          key: 'cors-file.txt',
+          size_bytes: fileSize,
+          etag: '"proxy-etag-123"',
+        });
+        xhr.onload?.();
+      };
+
+      const item = await uploadFile(file, 'primary', '');
+
+      expect(MockXHR.instances).toHaveLength(1);
+      const xhr = MockXHR.instances[0];
+      expect(xhr.open).toHaveBeenCalledWith(
+        'POST',
+        '/api/buckets/primary/upload/proxy?key=cors-file.txt'
+      );
+      expect(bucketStore.corsStatus).toBe('blocked');
+      expect(item.fallback).toBe(true);
+      expect(item.status).toBe('completed');
+      expect(item.progress).toBe(100);
+      expect(refreshSpy).toHaveBeenCalled();
+    });
+
+    it('falls back to uploadViaProxy when multipart upload encounters CORS TypeError', async () => {
+      const fileSize = 20 * 1024 * 1024; // 20MB -> multipart
+      const file = new File([new Uint8Array(fileSize)], 'large-cors.bin', { type: 'application/octet-stream' });
+      const refreshSpy = vi.spyOn(bucketStore, 'refresh').mockResolvedValue();
+      let abortedMultipartId = '';
+
+      globalThis.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (url.includes('/upload/init')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                mode: 'multipart',
+                upload_id: 'mp-cors-session',
+                part_size: PART_SIZE,
+                parts: [
+                  { part_number: 1, url: 'https://r2.presigned/part-1' },
+                  { part_number: 2, url: 'https://r2.presigned/part-2' },
+                ],
+              }),
+              { status: 200, headers: { 'Content-Type': 'application/json' } }
+            )
+          );
+        }
+
+        if (url.includes('/part-1') || url.includes('/part-2')) {
+          // Direct part upload blocked by CORS
+          return Promise.reject(new TypeError('Failed to fetch'));
+        }
+
+        if (url.includes('/upload/abort')) {
+          const body = JSON.parse(init?.body as string);
+          abortedMultipartId = body.upload_id;
+          return Promise.resolve(
+            new Response(JSON.stringify({ status: 'aborted' }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            })
+          );
+        }
+
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      MockXHR.onSend = (xhr) => {
+        xhr.upload?.onprogress?.({ lengthComputable: true, loaded: fileSize, total: fileSize });
+        xhr.status = 200;
+        xhr.responseText = JSON.stringify({
+          status: 'uploaded',
+          key: 'large-cors.bin',
+          size_bytes: fileSize,
+          etag: '"proxy-etag-large"',
+        });
+        xhr.onload?.();
+      };
+
+      const item = await uploadFile(file, 'primary', '');
+
+      expect(MockXHR.instances).toHaveLength(1);
+      const xhr = MockXHR.instances[0];
+      expect(xhr.open).toHaveBeenCalledWith(
+        'POST',
+        '/api/buckets/primary/upload/proxy?key=large-cors.bin'
+      );
+      expect(bucketStore.corsStatus).toBe('blocked');
+      expect(item.fallback).toBe(true);
+      expect(item.status).toBe('completed');
+      expect(item.progress).toBe(100);
+      expect(abortedMultipartId).toBe('mp-cors-session');
+      expect(refreshSpy).toHaveBeenCalled();
+    });
+
+    it('skips direct presigned upload and fast-paths directly to proxy fallback when corsStatus is blocked', async () => {
+      bucketStore.corsStatus = 'blocked';
+      const fileSize = 2048;
+      const file = new File([new Uint8Array(fileSize)], 'already-blocked.txt', { type: 'text/plain' });
+      const fetchSpy = vi.fn();
+      globalThis.fetch = fetchSpy;
+
+      MockXHR.onSend = (xhr) => {
+        xhr.upload?.onprogress?.({ lengthComputable: true, loaded: fileSize, total: fileSize });
+        xhr.status = 200;
+        xhr.responseText = JSON.stringify({
+          status: 'uploaded',
+          key: 'already-blocked.txt',
+          size_bytes: fileSize,
+          etag: '"proxy-etag-fastpath"',
+        });
+        xhr.onload?.();
+      };
+
+      const item = await uploadFile(file, 'primary', '');
+
+      // Direct presigned init / PUT was never called because status was already blocked
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(MockXHR.instances).toHaveLength(1);
+      expect(item.fallback).toBe(true);
+      expect(item.status).toBe('completed');
+      expect(item.progress).toBe(100);
+    });
+
+    it('fails upload without proxy fallback when proxyFallbackPreference is false', async () => {
+      uploadStore.proxyFallbackPreference = false;
+      const fileSize = 100;
+      const file = new File([new Uint8Array(fileSize)], 'cors-disabled-user.txt', { type: 'text/plain' });
+
+      globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/upload/init')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ mode: 'single', upload_url: 'https://r2.direct/cors-disabled-user.txt' }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            })
+          );
+        }
+        if (url.includes('https://r2.direct/cors-disabled-user.txt')) {
+          return Promise.reject(new TypeError('Failed to fetch'));
+        }
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      MockXHR.onSend = vi.fn();
+
+      await expect(uploadFile(file, 'primary', '')).rejects.toThrow(
+        /Server proxy fallback is disabled by user settings/
+      );
+      expect(MockXHR.instances).toHaveLength(0);
+      expect(bucketStore.corsStatus).toBe('blocked');
+      expect(uploadStore.items[0]?.fallback).toBeFalsy();
+    });
+
+    it('fails upload without proxy fallback when server fallback_policy.enabled is false', async () => {
+      bucketStore.serverFallbackPolicy = { enabled: false, max_payload_bytes: 5368709120 };
+      const fileSize = 100;
+      const file = new File([new Uint8Array(fileSize)], 'cors-disabled-server.txt', { type: 'text/plain' });
+
+      globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/upload/init')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ mode: 'single', upload_url: 'https://r2.direct/cors-disabled-server.txt' }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            })
+          );
+        }
+        if (url.includes('https://r2.direct/cors-disabled-server.txt')) {
+          return Promise.reject(new TypeError('Failed to fetch'));
+        }
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      MockXHR.onSend = vi.fn();
+
+      await expect(uploadFile(file, 'primary', '')).rejects.toThrow(
+        /Server proxy fallback is disabled by server configuration/
+      );
+      expect(MockXHR.instances).toHaveLength(0);
+      expect(bucketStore.corsStatus).toBe('blocked');
+      expect(uploadStore.items[0]?.fallback).toBeFalsy();
+    });
+
+    it('fails upload early when file size exceeds server fallback_policy.max_payload_bytes', async () => {
+      bucketStore.serverFallbackPolicy = { enabled: true, max_payload_bytes: 50 };
+      const fileSize = 100;
+      const file = new File([new Uint8Array(fileSize)], 'cors-oversized.txt', { type: 'text/plain' });
+
+      globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/upload/init')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ mode: 'single', upload_url: 'https://r2.direct/cors-oversized.txt' }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            })
+          );
+        }
+        if (url.includes('https://r2.direct/cors-oversized.txt')) {
+          return Promise.reject(new TypeError('Failed to fetch'));
+        }
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      MockXHR.onSend = vi.fn();
+
+      await expect(uploadFile(file, 'primary', '')).rejects.toThrow(
+        /exceeds server proxy upload limit/
+      );
+      expect(MockXHR.instances).toHaveLength(0);
+      expect(bucketStore.corsStatus).toBe('blocked');
+      expect(uploadStore.items[0]?.fallback).toBeFalsy();
+    });
+
+    it('fails multipart upload and cleans up session when proxy fallback is disabled', async () => {
+      uploadStore.proxyFallbackPreference = false;
+      const fileSize = 12 * 1024 * 1024; // 12MB -> multipart
+      const file = new File([new Uint8Array(fileSize)], 'cors-mp-disabled.bin', { type: 'application/octet-stream' });
+
+      let abortedOnServer = false;
+      globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/upload/init')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                mode: 'multipart',
+                upload_id: 'mp-cors-gate-test',
+                part_size: 10 * 1024 * 1024,
+                parts: [
+                  { part_number: 1, upload_url: 'https://r2.direct/mp-part-1' },
+                  { part_number: 2, upload_url: 'https://r2.direct/mp-part-2' },
+                ],
+              }),
+              { status: 200, headers: { 'Content-Type': 'application/json' } }
+            )
+          );
+        }
+        if (url.includes('https://r2.direct/mp-part-')) {
+          return Promise.reject(new TypeError('Failed to fetch'));
+        }
+        if (url.includes('/upload/abort')) {
+          abortedOnServer = true;
+          return Promise.resolve(new Response(JSON.stringify({ status: 'aborted' }), { status: 200 }));
+        }
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      MockXHR.onSend = vi.fn();
+
+      await expect(uploadFile(file, 'primary', '')).rejects.toThrow(
+        /Server proxy fallback is disabled by user settings/
+      );
+      expect(MockXHR.instances).toHaveLength(0);
+      expect(abortedOnServer).toBe(true);
+      expect(bucketStore.corsStatus).toBe('blocked');
+      expect(uploadStore.items[0]?.fallback).toBeFalsy();
+    });
+
+    it('uploadStore.setFallback flags fallback and clears uploadId', () => {
+      const item = uploadStore.add({
+        file: new Blob(['hello']),
+        key: 'doc.txt',
+        profile: 'primary',
+      });
+      uploadStore.setUploadId(item.id, 'mp-session-to-clear');
+      expect(item.uploadId).toBe('mp-session-to-clear');
+      expect(item.fallback).toBeFalsy();
+
+      uploadStore.setFallback(item.id);
+      expect(item.fallback).toBe(true);
+      expect(item.uploadId).toBeUndefined();
+    });
   });
 });

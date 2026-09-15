@@ -2,7 +2,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { apiRequest, ApiError } from './client';
 import { login, logout, checkAuth } from './auth';
 import { listBuckets, listObjects, deleteObject, getDownloadUrl } from './objects';
-import { initUpload, resumeUpload, completeUpload, abortUpload } from './transfers';
+import {
+  initUpload,
+  resumeUpload,
+  completeUpload,
+  abortUpload,
+  getCorsProbe,
+  uploadViaProxy,
+} from './transfers';
 
 describe('API Client (client.ts)', () => {
   const originalFetch = globalThis.fetch;
@@ -324,5 +331,212 @@ describe('Transfers API (transfers.ts)', () => {
         body: JSON.stringify({ upload_id: 'up-123' }),
       })
     );
+  });
+
+  it('getCorsProbe fetches presigned probe URL and fallback_policy', async () => {
+    const mockProbe = {
+      probe_url: 'https://r2.example.com/.r2drive-probe?token=xyz',
+      fallback_policy: {
+        enabled: true,
+        max_payload_bytes: 5368709120,
+      },
+    };
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(mockProbe), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    const probeData = await getCorsProbe('primary');
+    expect(probeData).toEqual(mockProbe);
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/buckets/primary/cors-probe',
+      expect.anything()
+    );
+  });
+
+  it('getCorsProbe fetches presigned probe URL and fallback policy', async () => {
+    const mockProbe = {
+      probe_url: 'https://r2.example.com/.r2drive-probe?token=xyz',
+      fallback_policy: {
+        enabled: true,
+        max_payload_bytes: 5368709120,
+      },
+    };
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(mockProbe), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    const res = await getCorsProbe('primary');
+    expect(res.probe_url).toBe('https://r2.example.com/.r2drive-probe?token=xyz');
+    expect(res.fallback_policy.enabled).toBe(true);
+    expect(res.fallback_policy.max_payload_bytes).toBe(5368709120);
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/buckets/primary/cors-probe',
+      expect.anything()
+    );
+  });
+
+  describe('uploadViaProxy', () => {
+    class MockXMLHttpRequest {
+      static instances: MockXMLHttpRequest[] = [];
+      open = vi.fn();
+      setRequestHeader = vi.fn();
+      send = vi.fn();
+      abort = vi.fn(() => {
+        if (this.onabort) this.onabort();
+      });
+      withCredentials = false;
+      status = 200;
+      responseText = '';
+      upload = {
+        onprogress: null as ((e: any) => void) | null,
+      };
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+
+      constructor() {
+        MockXMLHttpRequest.instances.push(this);
+      }
+    }
+
+    beforeEach(() => {
+      MockXMLHttpRequest.instances = [];
+      (globalThis as any).XMLHttpRequest = MockXMLHttpRequest;
+    });
+
+    afterEach(() => {
+      delete (globalThis as any).XMLHttpRequest;
+    });
+
+    it('sends POST with XHR to /api/buckets/{profile}/upload/proxy?key=... and resolves with parsed response', async () => {
+      const mockResult = {
+        status: 'uploaded',
+        key: 'photos/cat.png',
+        size_bytes: 1024,
+        etag: '"test-etag"',
+      };
+
+      const file = new File(['cat-pic-bytes'], 'cat.png', { type: 'image/png' });
+      const promise = uploadViaProxy('primary', 'photos/cat.png', file);
+
+      expect(MockXMLHttpRequest.instances).toHaveLength(1);
+      const xhr = MockXMLHttpRequest.instances[0];
+
+      expect(xhr.open).toHaveBeenCalledWith(
+        'POST',
+        '/api/buckets/primary/upload/proxy?key=photos%2Fcat.png'
+      );
+      expect(xhr.withCredentials).toBe(true);
+      expect(xhr.setRequestHeader).toHaveBeenCalledWith('Content-Type', 'image/png');
+      expect(xhr.send).toHaveBeenCalledWith(file);
+
+      // Simulate successful completion
+      xhr.status = 200;
+      xhr.responseText = JSON.stringify(mockResult);
+      xhr.onload?.();
+
+      const res = await promise;
+      expect(res).toEqual(mockResult);
+    });
+
+    it('dispatches progress callbacks when length is computable', async () => {
+      const file = new File(['data'], 'test.bin');
+      const onProgress = vi.fn();
+
+      const promise = uploadViaProxy('default', 'test.bin', file, onProgress);
+      const xhr = MockXMLHttpRequest.instances[0];
+
+      // Computable progress event
+      xhr.upload.onprogress?.({ lengthComputable: true, loaded: 50, total: 100 });
+      expect(onProgress).toHaveBeenCalledWith(50, 100);
+
+      // Non-computable progress event should not dispatch
+      xhr.upload.onprogress?.({ lengthComputable: false, loaded: 75, total: 100 });
+      expect(onProgress).toHaveBeenCalledTimes(1);
+
+      xhr.status = 200;
+      xhr.responseText = JSON.stringify({ status: 'uploaded', key: 'test.bin', size_bytes: 4 });
+      xhr.onload?.();
+
+      await promise;
+    });
+
+    it('handles already aborted signal before sending', async () => {
+      const controller = new AbortController();
+      controller.abort();
+
+      const file = new File(['data'], 'test.bin');
+      await expect(
+        uploadViaProxy('default', 'test.bin', file, undefined, controller.signal)
+      ).rejects.toThrow(/aborted/i);
+    });
+
+    it('aborts XHR when signal is aborted during transfer', async () => {
+      const controller = new AbortController();
+      const file = new File(['data'], 'test.bin');
+
+      const promise = uploadViaProxy('default', 'test.bin', file, undefined, controller.signal);
+      const xhr = MockXMLHttpRequest.instances[0];
+
+      controller.abort();
+      expect(xhr.abort).toHaveBeenCalled();
+
+      await expect(promise).rejects.toThrow(/aborted/i);
+    });
+
+    it('cleans up abort event listener when upload completes successfully', async () => {
+      const controller = new AbortController();
+      const removeSpy = vi.spyOn(controller.signal, 'removeEventListener');
+      const file = new File(['data'], 'test.bin');
+
+      const promise = uploadViaProxy('default', 'test.bin', file, undefined, controller.signal);
+      const xhr = MockXMLHttpRequest.instances[0];
+      xhr.status = 200;
+      xhr.responseText = JSON.stringify({ status: 'uploaded', key: 'test.bin', size_bytes: 4 });
+      xhr.onload?.();
+
+      await promise;
+      expect(removeSpy).toHaveBeenCalledWith('abort', expect.any(Function));
+    });
+
+    it('rejects with error when XHR encounters network error', async () => {
+      const file = new File(['data'], 'test.bin');
+      const promise = uploadViaProxy('default', 'test.bin', file);
+      const xhr = MockXMLHttpRequest.instances[0];
+
+      xhr.onerror?.();
+
+      await expect(promise).rejects.toThrow(/Network error during proxy upload/);
+    });
+
+    it('rejects with server error message when status is non-2xx', async () => {
+      const file = new File(['data'], 'test.bin');
+      const promise = uploadViaProxy('default', 'test.bin', file);
+      const xhr = MockXMLHttpRequest.instances[0];
+
+      xhr.status = 403;
+      xhr.responseText = JSON.stringify({ error: 'Bucket write access forbidden' });
+      xhr.onload?.();
+
+      await expect(promise).rejects.toThrow('Bucket write access forbidden');
+    });
+
+    it('rejects with generic status message when non-2xx body is not JSON', async () => {
+      const file = new File(['data'], 'test.bin');
+      const promise = uploadViaProxy('default', 'test.bin', file);
+      const xhr = MockXMLHttpRequest.instances[0];
+
+      xhr.status = 502;
+      xhr.responseText = 'Bad Gateway';
+      xhr.onload?.();
+
+      await expect(promise).rejects.toThrow('Proxy upload failed with status 502');
+    });
   });
 });

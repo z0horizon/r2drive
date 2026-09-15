@@ -3,15 +3,18 @@
   import { authStore } from '$lib/stores/auth.svelte';
   import { bucketStore } from '$lib/stores/bucket.svelte';
   import Header from './components/layout/Header.svelte';
+  import CorsBanner from './components/layout/CorsBanner.svelte';
   import Breadcrumbs from './components/layout/Breadcrumbs.svelte';
   import FileList from './components/explorer/FileList.svelte';
   import LoginModal from './components/modals/LoginModal.svelte';
+  import CorsModal from './components/modals/CorsModal.svelte';
   import DropZone from './components/upload/DropZone.svelte';
   import UploadModal from './components/upload/UploadModal.svelte';
   import { HardDrive, RefreshCw, Upload, AlertCircle } from 'lucide-svelte';
 
   let initialized = $state(false);
   let dropZone: ReturnType<typeof DropZone> | null = $state(null);
+  let showCorsModal = $state(false);
 
   onMount(async () => {
     try {
@@ -52,6 +55,9 @@
       <!-- Authentication challenge modal -->
       <LoginModal />
     {:else}
+      <!-- Amber CORS Warning Banner -->
+      <CorsBanner onConfigure={() => (showCorsModal = true)} />
+
       <!-- Main Content Area -->
       <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6">
         <!-- Error Alert Banner -->
@@ -108,6 +114,9 @@
         <!-- Floating Upload Manager Panel -->
         <UploadModal />
       </main>
+
+      <!-- CORS Setup & Diagnostic Modal -->
+      <CorsModal open={showCorsModal} onClose={() => (showCorsModal = false)} />
     {/if}
   </div>
 {/if}
