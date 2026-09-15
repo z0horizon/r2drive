@@ -6,6 +6,7 @@ import {
   cancelUpload,
   uploadFile,
   resumeInterruptedUpload,
+  isCorsOrNetworkError,
   PART_SIZE,
   MAX_CONCURRENCY,
   MAX_RETRIES,
@@ -260,6 +261,32 @@ describe('Upload Part Retry and Backoff (uploadPartWithRetry)', () => {
     ).rejects.toThrow(/Failed to fetch/);
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('CORS and Network Error Detection (isCorsOrNetworkError)', () => {
+  it('detects standard browser Failed to fetch error', () => {
+    expect(isCorsOrNetworkError(new TypeError('Failed to fetch'))).toBe(true);
+  });
+
+  it('detects Node.js and Undici fetch failed error', () => {
+    expect(isCorsOrNetworkError(new TypeError('fetch failed'))).toBe(true);
+  });
+
+  it('detects generic NetworkError and CORS messages', () => {
+    expect(isCorsOrNetworkError(new Error('NetworkError when attempting to fetch resource.'))).toBe(true);
+    expect(isCorsOrNetworkError(new Error('Cross-Origin Request Blocked: The Same Origin Policy disallows reading the remote resource.'))).toBe(true);
+  });
+
+  it('ignores user aborts and DOMException AbortError', () => {
+    expect(isCorsOrNetworkError(new DOMException('Upload aborted by user', 'AbortError'))).toBe(false);
+    expect(isCorsOrNetworkError(new Error('The user aborted a request.'))).toBe(false);
+  });
+
+  it('returns false for unrelated application errors', () => {
+    expect(isCorsOrNetworkError(new Error('Invalid JSON response'))).toBe(false);
+    expect(isCorsOrNetworkError(null)).toBe(false);
+    expect(isCorsOrNetworkError(undefined)).toBe(false);
   });
 });
 

@@ -20,30 +20,13 @@ pub fn parse_size_str(input: &str) -> Option<u64> {
     let num: u64 = num_str.parse().ok()?;
 
     let unit = unit_str.trim();
-    let multiplier: u64 = if unit.is_empty() || unit.eq_ignore_ascii_case("b") {
-        1
-    } else if unit.eq_ignore_ascii_case("k")
-        || unit.eq_ignore_ascii_case("kb")
-        || unit.eq_ignore_ascii_case("kib")
-    {
-        1024
-    } else if unit.eq_ignore_ascii_case("m")
-        || unit.eq_ignore_ascii_case("mb")
-        || unit.eq_ignore_ascii_case("mib")
-    {
-        1024 * 1024
-    } else if unit.eq_ignore_ascii_case("g")
-        || unit.eq_ignore_ascii_case("gb")
-        || unit.eq_ignore_ascii_case("gib")
-    {
-        1024 * 1024 * 1024
-    } else if unit.eq_ignore_ascii_case("t")
-        || unit.eq_ignore_ascii_case("tb")
-        || unit.eq_ignore_ascii_case("tib")
-    {
-        1024 * 1024 * 1024 * 1024
-    } else {
-        return None;
+    let multiplier: u64 = match unit.to_ascii_lowercase().as_str() {
+        "" | "b" => 1,
+        "k" | "kb" | "kib" => 1024,
+        "m" | "mb" | "mib" => 1024 * 1024,
+        "g" | "gb" | "gib" => 1024 * 1024 * 1024,
+        "t" | "tb" | "tib" => 1024 * 1024 * 1024 * 1024,
+        _ => return None,
     };
 
     num.checked_mul(multiplier)
@@ -515,6 +498,16 @@ transfers:
         let yaml = r#"
 transfers:
   max_proxy_file_size: "not-a-size"
+"#;
+        let config: Config = yaml.parse().unwrap();
+        assert_eq!(config.transfers.max_payload_bytes(), 5 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_oversized_proxy_file_size_clamped_to_5gb() {
+        let yaml = r#"
+transfers:
+  max_proxy_file_size: "10GB"
 "#;
         let config: Config = yaml.parse().unwrap();
         assert_eq!(config.transfers.max_payload_bytes(), 5 * 1024 * 1024 * 1024);

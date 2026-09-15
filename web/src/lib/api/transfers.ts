@@ -254,8 +254,6 @@ export function uploadViaProxy(
     if (signal) {
       abortHandler = () => {
         xhr.abort();
-        cleanup();
-        reject(new DOMException('Upload aborted by user', 'AbortError'));
       };
       signal.addEventListener('abort', abortHandler, { once: true });
     }

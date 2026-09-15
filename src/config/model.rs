@@ -149,7 +149,7 @@ impl Default for TransfersConfig {
 
 impl TransfersConfig {
     pub fn max_payload_bytes(&self) -> u64 {
-        match crate::config::parse_size_str(&self.max_proxy_file_size) {
+        let bytes = match crate::config::parse_size_str(&self.max_proxy_file_size) {
             Some(bytes) => bytes,
             None => {
                 tracing::warn!(
@@ -159,6 +159,18 @@ impl TransfersConfig {
                 );
                 DEFAULT_MAX_PROXY_PAYLOAD_BYTES
             }
+        };
+
+        if bytes > DEFAULT_MAX_PROXY_PAYLOAD_BYTES {
+            tracing::warn!(
+                "Configured max_proxy_file_size '{}' ({} bytes) exceeds S3 single PUT limit (5GB); clamping to {} bytes",
+                self.max_proxy_file_size,
+                bytes,
+                DEFAULT_MAX_PROXY_PAYLOAD_BYTES
+            );
+            DEFAULT_MAX_PROXY_PAYLOAD_BYTES
+        } else {
+            bytes
         }
     }
 }

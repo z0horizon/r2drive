@@ -101,9 +101,11 @@ export function isCorsOrNetworkError(err: unknown): boolean {
   const msg = (e.message || '').toLowerCase();
   return (
     msg.includes('failed to fetch') ||
+    msg.includes('fetch failed') ||
     msg.includes('networkerror') ||
     msg.includes('load failed') ||
     msg.includes('cors') ||
+    msg.includes('cross-origin') ||
     msg.includes('access-control-allow-origin')
   );
 }

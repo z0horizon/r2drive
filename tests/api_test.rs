@@ -872,6 +872,25 @@ async fn test_upload_proxy_endpoint() {
         "Content-Length header required for proxy upload"
     );
 
+    // 3b. Authenticated POST with trailing slash key returns 400 BadRequest
+    let trailing_slash_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/buckets/default/upload/proxy?key=folder/")
+        .header(header::AUTHORIZATION, "Bearer super-secret-password")
+        .header(header::CONTENT_LENGTH, "11")
+        .body(Body::from("hello world"))
+        .unwrap();
+    let trailing_slash_res = app.clone().oneshot(trailing_slash_req).await.unwrap();
+    assert_eq!(trailing_slash_res.status(), StatusCode::BAD_REQUEST);
+    let trailing_slash_bytes = to_bytes(trailing_slash_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let trailing_slash_body: Value = serde_json::from_slice(&trailing_slash_bytes).unwrap();
+    assert_eq!(
+        trailing_slash_body["error"],
+        "Object key cannot end with a slash"
+    );
+
     // 4. Authenticated POST with missing/invalid profile returns 404 NotFound
     let not_found_req = Request::builder()
         .method(Method::POST)

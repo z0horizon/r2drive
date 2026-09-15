@@ -324,7 +324,7 @@ where
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
-        let inner = self.inner.get_mut().unwrap();
+        let inner = self.inner.get_mut().unwrap_or_else(|e| e.into_inner());
         std::pin::Pin::new(inner).poll_frame(cx)
     }
 
@@ -358,6 +358,11 @@ pub async fn upload_proxy(
     if clean_key.is_empty() {
         return Err(AppError::BadRequest(
             "Object key cannot be empty".to_string(),
+        ));
+    }
+    if clean_key.ends_with('/') {
+        return Err(AppError::BadRequest(
+            "Object key cannot end with a slash".to_string(),
         ));
     }
 
