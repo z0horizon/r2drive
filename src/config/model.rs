@@ -92,6 +92,41 @@ impl Default for SyncConfig {
     }
 }
 
+fn default_proxy_fallback() -> bool {
+    true
+}
+
+fn default_max_proxy_file_size() -> String {
+    "5GB".to_string()
+}
+
+pub const DEFAULT_MAX_PROXY_PAYLOAD_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+
+/// Transfer and proxy upload fallback configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransfersConfig {
+    #[serde(default = "default_proxy_fallback")]
+    pub proxy_fallback: bool,
+    #[serde(default = "default_max_proxy_file_size")]
+    pub max_proxy_file_size: String,
+}
+
+impl Default for TransfersConfig {
+    fn default() -> Self {
+        Self {
+            proxy_fallback: default_proxy_fallback(),
+            max_proxy_file_size: default_max_proxy_file_size(),
+        }
+    }
+}
+
+impl TransfersConfig {
+    pub fn max_payload_bytes(&self) -> u64 {
+        crate::config::parse_size_str(&self.max_proxy_file_size)
+            .unwrap_or(DEFAULT_MAX_PROXY_PAYLOAD_BYTES)
+    }
+}
+
 /// Credentials and settings for a Cloudflare R2 bucket profile.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct BucketProfile {
@@ -112,6 +147,8 @@ pub struct Config {
     pub database: DatabaseConfig,
     #[serde(default)]
     pub sync: SyncConfig,
+    #[serde(default)]
+    pub transfers: TransfersConfig,
     #[serde(default = "default_profile_name")]
     pub default_profile: String,
     #[serde(default)]
@@ -124,6 +161,7 @@ impl Default for Config {
             server: ServerConfig::default(),
             database: DatabaseConfig::default(),
             sync: SyncConfig::default(),
+            transfers: TransfersConfig::default(),
             default_profile: default_profile_name(),
             profiles: HashMap::new(),
         }

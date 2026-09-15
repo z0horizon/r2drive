@@ -3,7 +3,34 @@ pub mod model;
 use crate::error::AppError;
 use std::path::{Path, PathBuf};
 
-pub use model::{BucketProfile, Config, DatabaseConfig, ServerConfig, SyncConfig};
+pub use model::{BucketProfile, Config, DatabaseConfig, ServerConfig, SyncConfig, TransfersConfig};
+
+/// Parse a human-readable size string (e.g. "500MB", "1GB", "1024", "100kib") into bytes.
+pub fn parse_size_str(input: &str) -> Option<u64> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let split_idx = trimmed
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(trimmed.len());
+
+    let (num_str, unit_str) = trimmed.split_at(split_idx);
+    let num: u64 = num_str.parse().ok()?;
+
+    let unit = unit_str.trim().to_ascii_lowercase();
+    let multiplier: u64 = match unit.as_str() {
+        "" | "b" => 1,
+        "k" | "kb" | "kib" => 1024,
+        "m" | "mb" | "mib" => 1024 * 1024,
+        "g" | "gb" | "gib" => 1024 * 1024 * 1024,
+        "t" | "tb" | "tib" => 1024 * 1024 * 1024 * 1024,
+        _ => return None,
+    };
+
+    num.checked_mul(multiplier)
+}
 
 fn substitute_line(line: &str) -> Result<String, AppError> {
     let mut result = String::with_capacity(line.len());
@@ -417,5 +444,38 @@ server:
 
         let config2 = Config::from_str(yaml).expect("Failed to parse via Config::from_str");
         assert_eq!(config2.server.port, 9999);
+    }
+
+    #[test]
+    fn test_default_transfers_config() {
+        let config = Config::default();
+        assert!(config.transfers.proxy_fallback);
+        assert_eq!(config.transfers.max_proxy_file_size, "5GB");
+        assert_eq!(config.transfers.max_payload_bytes(), 5 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_custom_transfers_config_parsing() {
+        let yaml = r#"
+transfers:
+  proxy_fallback: false
+  max_proxy_file_size: "250MB"
+"#;
+        let config: Config = yaml.parse().unwrap();
+        assert!(!config.transfers.proxy_fallback);
+        assert_eq!(config.transfers.max_proxy_file_size, "250MB");
+        assert_eq!(config.transfers.max_payload_bytes(), 250 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_parse_size_str() {
+        assert_eq!(parse_size_str("1024"), Some(1024));
+        assert_eq!(parse_size_str("500b"), Some(500));
+        assert_eq!(parse_size_str("100KB"), Some(100 * 1024));
+        assert_eq!(parse_size_str("100kib"), Some(100 * 1024));
+        assert_eq!(parse_size_str("50MB"), Some(50 * 1024 * 1024));
+        assert_eq!(parse_size_str("2GB"), Some(2 * 1024 * 1024 * 1024));
+        assert_eq!(parse_size_str(""), None);
+        assert_eq!(parse_size_str("invalid"), None);
     }
 }
