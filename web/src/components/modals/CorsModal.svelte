@@ -258,7 +258,9 @@
           <label class="flex items-center gap-2 select-none {bucketStore.serverFallbackPolicy.enabled ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed'}">
             <input
               type="checkbox"
-              checked={uploadStore.proxyFallbackPreference && bucketStore.serverFallbackPolicy.enabled}
+              id="cors-fallback-toggle"
+              aria-describedby="cors-fallback-desc"
+              checked={uploadStore.proxyFallbackPreference}
               disabled={!bucketStore.serverFallbackPolicy.enabled}
               onchange={(e) => uploadStore.setProxyFallbackPreference(e.currentTarget.checked)}
               class="rounded border-slate-700 bg-slate-800 text-indigo-600 focus:ring-0 focus:ring-offset-0 w-4 h-4 disabled:opacity-40"
@@ -273,7 +275,7 @@
             </span>
           {/if}
         </div>
-        <p class="text-xs text-slate-400 leading-relaxed">
+        <p id="cors-fallback-desc" class="text-xs text-slate-400 leading-relaxed">
           {#if !bucketStore.serverFallbackPolicy.enabled}
             Server proxy fallback has been disabled by the server administrator in <code class="text-slate-300">config.yaml</code>. Direct R2 uploads require valid CORS configuration.
           {:else}

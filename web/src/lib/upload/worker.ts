@@ -27,6 +27,7 @@ import {
   addCompletedPart,
   type UploadManifest,
 } from './indexeddb';
+import { formatBytes } from '../utils/format';
 
 export const PART_SIZE = 10 * 1024 * 1024; // 10MB (10,485,760 bytes)
 export const MAX_CONCURRENCY = 4;
@@ -237,9 +238,6 @@ async function executeProxyFallback(
   key: string,
   signal: AbortSignal
 ): Promise<UploadItem> {
-  const proxyStartTime = Date.now();
-  uploadStore.setFallback(item.id);
-  uploadStore.updateProgress(item.id, 0, 0, 0);
   bucketStore.corsStatus = 'blocked';
 
   if (!uploadStore.proxyFallbackPreference) {
@@ -251,9 +249,13 @@ async function executeProxyFallback(
   }
   if (file.size > serverPolicy.max_payload_bytes) {
     throw new Error(
-      `Upload blocked by CORS. File size (${file.size} bytes) exceeds server proxy upload limit of ${serverPolicy.max_payload_bytes} bytes.`
+      `Upload blocked by CORS. File size (${formatBytes(file.size)}) exceeds server proxy upload limit of ${formatBytes(serverPolicy.max_payload_bytes)}.`
     );
   }
+
+  const proxyStartTime = Date.now();
+  uploadStore.setFallback(item.id);
+  uploadStore.updateProgress(item.id, 0, 0, 0);
 
   await uploadViaProxy(
     profile,

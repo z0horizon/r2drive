@@ -702,11 +702,15 @@ describe('Upload Engine Execution (worker.ts)', () => {
       MockXHR.onSend = null;
       (globalThis as any).XMLHttpRequest = MockXHR;
       uploadStore.clearAll();
+      uploadStore.proxyFallbackPreference = true;
       bucketStore.corsStatus = 'unknown';
+      bucketStore.serverFallbackPolicy = { enabled: true, max_payload_bytes: 5368709120 };
     });
 
     afterEach(() => {
       delete (globalThis as any).XMLHttpRequest;
+      uploadStore.proxyFallbackPreference = true;
+      bucketStore.serverFallbackPolicy = { enabled: true, max_payload_bytes: 5368709120 };
     });
 
     it('falls back to uploadViaProxy when single upload direct PUT throws CORS TypeError', async () => {
@@ -889,7 +893,7 @@ describe('Upload Engine Execution (worker.ts)', () => {
       );
       expect(MockXHR.instances).toHaveLength(0);
       expect(bucketStore.corsStatus).toBe('blocked');
-      uploadStore.proxyFallbackPreference = true;
+      expect(uploadStore.items[0]?.fallback).toBeFalsy();
     });
 
     it('fails upload without proxy fallback when server fallback_policy.enabled is false', async () => {
@@ -919,7 +923,7 @@ describe('Upload Engine Execution (worker.ts)', () => {
       );
       expect(MockXHR.instances).toHaveLength(0);
       expect(bucketStore.corsStatus).toBe('blocked');
-      bucketStore.serverFallbackPolicy = { enabled: true, max_payload_bytes: 5368709120 };
+      expect(uploadStore.items[0]?.fallback).toBeFalsy();
     });
 
     it('fails upload early when file size exceeds server fallback_policy.max_payload_bytes', async () => {
@@ -949,7 +953,51 @@ describe('Upload Engine Execution (worker.ts)', () => {
       );
       expect(MockXHR.instances).toHaveLength(0);
       expect(bucketStore.corsStatus).toBe('blocked');
-      bucketStore.serverFallbackPolicy = { enabled: true, max_payload_bytes: 5368709120 };
+      expect(uploadStore.items[0]?.fallback).toBeFalsy();
+    });
+
+    it('fails multipart upload and cleans up session when proxy fallback is disabled', async () => {
+      uploadStore.proxyFallbackPreference = false;
+      const fileSize = 12 * 1024 * 1024; // 12MB -> multipart
+      const file = new File([new Uint8Array(fileSize)], 'cors-mp-disabled.bin', { type: 'application/octet-stream' });
+
+      let abortedOnServer = false;
+      globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/upload/init')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                mode: 'multipart',
+                upload_id: 'mp-cors-gate-test',
+                part_size: 10 * 1024 * 1024,
+                parts: [
+                  { part_number: 1, upload_url: 'https://r2.direct/mp-part-1' },
+                  { part_number: 2, upload_url: 'https://r2.direct/mp-part-2' },
+                ],
+              }),
+              { status: 200, headers: { 'Content-Type': 'application/json' } }
+            )
+          );
+        }
+        if (url.includes('https://r2.direct/mp-part-')) {
+          return Promise.reject(new TypeError('Failed to fetch'));
+        }
+        if (url.includes('/upload/abort')) {
+          abortedOnServer = true;
+          return Promise.resolve(new Response(JSON.stringify({ status: 'aborted' }), { status: 200 }));
+        }
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      MockXHR.onSend = vi.fn();
+
+      await expect(uploadFile(file, 'primary', '')).rejects.toThrow(
+        /Server proxy fallback is disabled by user settings/
+      );
+      expect(MockXHR.instances).toHaveLength(0);
+      expect(abortedOnServer).toBe(true);
+      expect(bucketStore.corsStatus).toBe('blocked');
+      expect(uploadStore.items[0]?.fallback).toBeFalsy();
     });
 
     it('uploadStore.setFallback flags fallback and clears uploadId', () => {

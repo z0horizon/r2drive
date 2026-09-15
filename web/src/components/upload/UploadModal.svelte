@@ -190,7 +190,9 @@
         >
           <input
             type="checkbox"
-            checked={uploadStore.proxyFallbackPreference && bucketStore.serverFallbackPolicy.enabled}
+            id="upload-fallback-toggle"
+            aria-describedby={!bucketStore.serverFallbackPolicy.enabled ? 'upload-fallback-server-status' : undefined}
+            checked={uploadStore.proxyFallbackPreference}
             disabled={!bucketStore.serverFallbackPolicy.enabled}
             onchange={(e) => uploadStore.setProxyFallbackPreference(e.currentTarget.checked)}
             class="rounded border-slate-700 bg-slate-800 text-indigo-600 focus:ring-0 focus:ring-offset-0 w-3.5 h-3.5 disabled:opacity-40"
@@ -198,7 +200,7 @@
           <span class="text-[11px]">Proxy upload fallback</span>
         </label>
         {#if !bucketStore.serverFallbackPolicy.enabled}
-          <span class="text-[10px] text-amber-400/80 font-mono">Server disabled</span>
+          <span id="upload-fallback-server-status" class="text-[10px] text-amber-400/80 font-mono">Server disabled</span>
         {/if}
       </div>
 
