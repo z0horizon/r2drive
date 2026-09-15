@@ -1,5 +1,6 @@
 <script lang="ts">
   import { uploadStore } from '$lib/stores/upload.svelte';
+  import { bucketStore } from '$lib/stores/bucket.svelte';
   import { cancelUpload } from '$lib/upload/worker';
   import { formatBytes } from '$lib/utils/format';
   import ProgressBar from './ProgressBar.svelte';
@@ -125,9 +126,19 @@
               <div class="flex items-center space-x-2 min-w-0">
                 <FileText class="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
                 <div class="min-w-0">
-                  <p class="text-xs font-medium text-slate-200 truncate" title={item.name}>
-                    {item.name}
-                  </p>
+                  <div class="flex items-center space-x-1.5 min-w-0">
+                    <p class="text-xs font-medium text-slate-200 truncate" title={item.name}>
+                      {item.name}
+                    </p>
+                    {#if item.fallback}
+                      <span
+                        class="text-xs px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-medium shrink-0"
+                        title="Uploaded via server proxy (CORS not configured on bucket)"
+                      >
+                        Proxy fallback
+                      </span>
+                    {/if}
+                  </div>
                   <p class="text-[10px] text-slate-400 font-mono">
                     {formatBytes(item.totalBytes)} • {item.key}
                   </p>
@@ -167,6 +178,30 @@
             />
           </div>
         {/each}
+      </div>
+
+      <!-- Fallback Preference Bar -->
+      <div class="px-3 py-1.5 bg-slate-950/90 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
+        <label
+          class="flex items-center space-x-2 select-none {bucketStore.serverFallbackPolicy.enabled ? 'cursor-pointer hover:text-slate-300' : 'opacity-50 cursor-not-allowed'}"
+          title={bucketStore.serverFallbackPolicy.enabled
+            ? 'Automatically route uploads through server proxy if Cloudflare R2 CORS is not configured'
+            : 'Proxy upload fallback is disabled by server configuration (config.yaml)'}
+        >
+          <input
+            type="checkbox"
+            id="upload-fallback-toggle"
+            aria-describedby={!bucketStore.serverFallbackPolicy.enabled ? 'upload-fallback-server-status' : undefined}
+            checked={uploadStore.proxyFallbackPreference}
+            disabled={!bucketStore.serverFallbackPolicy.enabled}
+            onchange={(e) => uploadStore.setProxyFallbackPreference(e.currentTarget.checked)}
+            class="rounded border-slate-700 bg-slate-800 text-indigo-600 focus:ring-0 focus:ring-offset-0 w-3.5 h-3.5 disabled:opacity-40"
+          />
+          <span class="text-[11px]">Proxy upload fallback</span>
+        </label>
+        {#if !bucketStore.serverFallbackPolicy.enabled}
+          <span id="upload-fallback-server-status" class="text-[10px] text-amber-400/80 font-mono">Server disabled</span>
+        {/if}
       </div>
 
       <!-- Modal Footer -->

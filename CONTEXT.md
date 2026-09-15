@@ -71,3 +71,24 @@ _Avoid_: UploadJob, ResumeState, TransferTask
 **StaleUploadCleanup**:
 The automated maintenance procedure aborting incomplete multipart uploads that have remained inactive beyond a 24-hour threshold to prevent storage waste.
 _Avoid_: GarbageCollect, AbortJob, PartCleaner
+
+**CorsProbe**:
+The lightweight preflight health-check verification performed by WebConsole against Cloudflare R2 to determine if direct transfers are permitted by the bucket's CORS policy.
+_Avoid_: CorsCheck, PreflightPing, CorsPing
+
+**ProxyTransferFallback**:
+The fail-safe streaming upload path routed through StorageNode when direct PresignedTransfer is blocked by browser CORS enforcement.
+_Avoid_: ServerUpload, ProxyUpload, FallbackStream
+
+**FallbackPolicy**:
+The administrative configuration and capacity limits on StorageNode governing whether streaming proxy uploads are enabled and the maximum allowable payload size.
+_Avoid_: ProxyConfig, FallbackRule, ServerUploadSetting
+
+**FallbackPreference**:
+The client-side user intent stored in WebConsole governing whether transfers should automatically divert to ProxyTransferFallback or halt with explicit CORS diagnostic guidance.
+_Avoid_: UserSetting, AutoProxyToggle, ClientFallbackChoice
+
+**PayloadLimitGate**:
+The early boundary check on StorageNode and WebConsole evaluating payload size against FallbackPolicy before network streaming or bandwidth consumption occurs.
+_Avoid_: SizeGuard, QuotaChecker, FileSizeValidator
+

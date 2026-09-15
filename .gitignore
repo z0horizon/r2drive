@@ -6,3 +6,6 @@
 *.db-shm
 .env
 config.yaml
+.DS_Store
+.worktrees
+.worktrees/

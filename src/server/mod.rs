@@ -48,6 +48,14 @@ pub fn create_router(state: AppState) -> Router {
             "/api/buckets/{profile}/download",
             get(routes::transfers::download_object),
         )
+        .route(
+            "/api/buckets/{profile}/cors-probe",
+            get(routes::transfers::cors_probe),
+        )
+        .route(
+            "/api/buckets/{profile}/upload/proxy",
+            post(routes::transfers::upload_proxy).layer(axum::extract::DefaultBodyLimit::disable()),
+        )
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             middleware::require_auth,
@@ -104,8 +112,6 @@ pub async fn cleanup_stale_multipart_sessions(state: &AppState) -> Result<usize,
                 &bucket,
                 &session.object_key,
                 &session.upload_id,
-                session.file_size as u64,
-                session.part_size as u64,
             )
             .await
         {

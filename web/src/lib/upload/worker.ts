@@ -15,6 +15,7 @@ import {
   resumeUpload,
   completeUpload,
   abortUpload,
+  uploadViaProxy,
   type CompletedPart,
   type PresignedPart,
 } from '../api/transfers';
@@ -26,11 +27,13 @@ import {
   addCompletedPart,
   type UploadManifest,
 } from './indexeddb';
+import { formatBytes } from '../utils/format';
 
 export const PART_SIZE = 10 * 1024 * 1024; // 10MB (10,485,760 bytes)
 export const MAX_CONCURRENCY = 4;
 export const MAX_RETRIES = 5;
-export const BASE_RETRY_DELAY_MS = 300;
+export const BASE_RETRY_DELAY_MS =
+  typeof process !== 'undefined' && process.env?.NODE_ENV === 'test' ? 10 : 300;
 
 /**
  * Normalizes prefix and file name into a clean S3 object key.
@@ -82,6 +85,29 @@ export function formatUploadErrorMessage(err: unknown): string {
     return err.message;
   }
   return String(err);
+}
+
+/**
+ * Detects whether an error is caused by a CORS restriction or network block.
+ * When direct-to-R2 upload is blocked by browser CORS policies, browsers throw
+ * specific error messages ("Failed to fetch", "NetworkError", "Load failed", etc.).
+ */
+export function isCorsOrNetworkError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { name?: string; message?: string };
+  if (e.name === 'AbortError' || e.message?.toLowerCase().includes('abort')) {
+    return false;
+  }
+  const msg = (e.message || '').toLowerCase();
+  return (
+    msg.includes('failed to fetch') ||
+    msg.includes('fetch failed') ||
+    msg.includes('networkerror') ||
+    msg.includes('load failed') ||
+    msg.includes('cors') ||
+    msg.includes('cross-origin') ||
+    msg.includes('access-control-allow-origin')
+  );
 }
 
 export async function sleep(ms: number): Promise<void> {
@@ -144,6 +170,10 @@ export async function uploadPartWithRetry(
       ) {
         throw err;
       }
+      // Do not retry on CORS or network block error: fail immediately to allow fast fallback
+      if (isCorsOrNetworkError(err)) {
+        throw err;
+      }
       lastError = err;
     }
 
@@ -200,6 +230,54 @@ export async function cancelUpload(id: string): Promise<void> {
 }
 
 /**
+ * Executes fallback upload via server streaming proxy when direct R2 transfer
+ * is blocked by CORS or network policies.
+ */
+async function executeProxyFallback(
+  item: UploadItem,
+  file: File | Blob,
+  profile: string,
+  key: string,
+  signal: AbortSignal
+): Promise<UploadItem> {
+  bucketStore.corsStatus = 'blocked';
+
+  if (!uploadStore.proxyFallbackPreference) {
+    throw new Error('Upload blocked by CORS. Server proxy fallback is disabled by user settings.');
+  }
+  const serverPolicy = bucketStore.serverFallbackPolicy;
+  if (!serverPolicy.enabled) {
+    throw new Error('Upload blocked by CORS. Server proxy fallback is disabled by server configuration.');
+  }
+  if (file.size > serverPolicy.max_payload_bytes) {
+    throw new Error(
+      `Upload blocked by CORS. File size (${formatBytes(file.size)}) exceeds server proxy upload limit of ${formatBytes(serverPolicy.max_payload_bytes)}.`
+    );
+  }
+
+  const proxyStartTime = Date.now();
+  uploadStore.setFallback(item.id);
+  uploadStore.updateProgress(item.id, 0, 0, 0);
+
+  await uploadViaProxy(
+    profile,
+    key,
+    file,
+    (loaded, total) => {
+      const progress = total > 0 ? Math.min(99, Math.round((loaded / total) * 100)) : 0;
+      const elapsedSec = Math.max(0.1, (Date.now() - proxyStartTime) / 1000);
+      const speed = Math.round(loaded / elapsedSec);
+      uploadStore.updateProgress(item.id, progress, speed, loaded);
+    },
+    signal
+  );
+
+  uploadStore.markComplete(item.id);
+  await bucketStore.refresh();
+  return item;
+}
+
+/**
  * Uploads a file directly to Cloudflare R2.
  * Uses single PUT for files < 10MB, or multipart chunking for files >= 10MB.
  */
@@ -221,6 +299,10 @@ export async function uploadFile(
   const startTime = Date.now();
 
   try {
+    if (bucketStore.corsStatus === 'blocked') {
+      return await executeProxyFallback(item, file, profile, key, controller.signal);
+    }
+
     if (file.size < PART_SIZE) {
       // Small file single PUT upload
       uploadStore.updateProgress(item.id, 0, 0, 0);
@@ -235,23 +317,30 @@ export async function uploadFile(
         headers['Content-Type'] = file.type;
       }
 
-      const res = await fetch(initRes.upload_url, {
-        method: 'PUT',
-        body: file,
-        headers,
-        signal: controller.signal,
-      });
+      try {
+        const res = await fetch(initRes.upload_url, {
+          method: 'PUT',
+          body: file,
+          headers,
+          signal: controller.signal,
+        });
 
-      if (!res.ok) {
-        throw new Error(`Single upload failed: HTTP ${res.status} ${res.statusText}`);
+        if (!res.ok) {
+          throw new Error(`Single upload failed: HTTP ${res.status} ${res.statusText}`);
+        }
+
+        uploadStore.markComplete(item.id);
+        await bucketStore.refresh();
+        return item;
+      } catch (directErr) {
+        if (controller.signal.aborted || (directErr instanceof DOMException && directErr.name === 'AbortError')) {
+          throw directErr;
+        }
+        if (isCorsOrNetworkError(directErr)) {
+          return await executeProxyFallback(item, file, profile, key, controller.signal);
+        }
+        throw directErr;
       }
-
-      const elapsedSec = Math.max(0.1, (Date.now() - startTime) / 1000);
-      const speed = Math.round(file.size / elapsedSec);
-      uploadStore.updateProgress(item.id, 100, speed, file.size);
-      uploadStore.markComplete(item.id);
-      await bucketStore.refresh();
-      return item;
     }
 
     // Large file multipart upload (>= 10MB)
@@ -277,31 +366,46 @@ export async function uploadFile(
     const completedParts: CompletedPart[] = [];
     let uploadedBytes = 0;
 
-    await executePartsPool(
-      file,
-      initRes.parts,
-      partSize,
-      controller,
-      async (partNum, etag, chunkSize) => {
-        completedParts.push({ part_number: partNum, etag });
-        await addCompletedPart(initRes.upload_id, { part_number: partNum, etag });
+    try {
+      await executePartsPool(
+        file,
+        initRes.parts,
+        partSize,
+        controller,
+        async (partNum, etag, chunkSize) => {
+          completedParts.push({ part_number: partNum, etag });
+          await addCompletedPart(initRes.upload_id, { part_number: partNum, etag });
 
-        uploadedBytes += chunkSize;
-        const progress = Math.min(99, Math.round((uploadedBytes / file.size) * 100));
-        const elapsedSec = Math.max(0.1, (Date.now() - startTime) / 1000);
-        const speed = Math.round(uploadedBytes / elapsedSec);
-        uploadStore.updateProgress(item.id, progress, speed, uploadedBytes);
+          uploadedBytes += chunkSize;
+          const progress = Math.min(99, Math.round((uploadedBytes / file.size) * 100));
+          const elapsedSec = Math.max(0.1, (Date.now() - startTime) / 1000);
+          const speed = Math.round(uploadedBytes / elapsedSec);
+          uploadStore.updateProgress(item.id, progress, speed, uploadedBytes);
+        }
+      );
+
+      // All parts uploaded successfully
+      completedParts.sort((a, b) => a.part_number - b.part_number);
+      await completeUpload(profile, initRes.upload_id, completedParts, key);
+
+      await deleteSession(initRes.upload_id);
+      uploadStore.markComplete(item.id);
+      await bucketStore.refresh();
+      return item;
+    } catch (directErr) {
+      if (controller.signal.aborted || (directErr instanceof DOMException && directErr.name === 'AbortError')) {
+        throw directErr;
       }
-    );
+      if (isCorsOrNetworkError(directErr)) {
+        await Promise.allSettled([
+          abortUpload(profile, initRes.upload_id),
+          deleteSession(initRes.upload_id),
+        ]);
 
-    // All parts uploaded successfully
-    completedParts.sort((a, b) => a.part_number - b.part_number);
-    await completeUpload(profile, initRes.upload_id, completedParts, key);
-
-    await deleteSession(initRes.upload_id);
-    uploadStore.markComplete(item.id);
-    await bucketStore.refresh();
-    return item;
+        return await executeProxyFallback(item, file, profile, key, controller.signal);
+      }
+      throw directErr;
+    }
   } catch (err) {
     const entry = activeControllers.get(item.id);
     const isUserAborted = entry?.userAborted || false;
@@ -356,37 +460,52 @@ export async function resumeInterruptedUpload(
     const initialProgress = Math.min(99, Math.round((uploadedBytes / manifest.fileSize) * 100));
     uploadStore.updateProgress(item.id, initialProgress, 0, uploadedBytes);
 
-    if (resumeRes.remaining_parts.length > 0) {
-      await executePartsPool(
-        file,
-        resumeRes.remaining_parts,
-        manifest.partSize,
-        controller,
-        async (partNum, etag, chunkSize) => {
-          completedParts.push({ part_number: partNum, etag });
-          await addCompletedPart(manifest.uploadId, { part_number: partNum, etag });
+    try {
+      if (resumeRes.remaining_parts.length > 0) {
+        await executePartsPool(
+          file,
+          resumeRes.remaining_parts,
+          manifest.partSize,
+          controller,
+          async (partNum, etag, chunkSize) => {
+            completedParts.push({ part_number: partNum, etag });
+            await addCompletedPart(manifest.uploadId, { part_number: partNum, etag });
 
-          uploadedBytes += chunkSize;
-          const progress = Math.min(99, Math.round((uploadedBytes / manifest.fileSize) * 100));
-          const elapsedSec = Math.max(0.1, (Date.now() - startTime) / 1000);
-          const bytesTransferredThisSession = uploadedBytes - initialUploadedBytes;
-          const speed = Math.round(bytesTransferredThisSession / elapsedSec);
-          uploadStore.updateProgress(item.id, progress, speed, uploadedBytes);
-        }
-      );
+            uploadedBytes += chunkSize;
+            const progress = Math.min(99, Math.round((uploadedBytes / manifest.fileSize) * 100));
+            const elapsedSec = Math.max(0.1, (Date.now() - startTime) / 1000);
+            const bytesTransferredThisSession = uploadedBytes - initialUploadedBytes;
+            const speed = Math.round(bytesTransferredThisSession / elapsedSec);
+            uploadStore.updateProgress(item.id, progress, speed, uploadedBytes);
+          }
+        );
+      }
+
+      completedParts.sort((a, b) => a.part_number - b.part_number);
+      await completeUpload(manifest.profile, manifest.uploadId, completedParts, manifest.key);
+
+      await deleteSession(manifest.uploadId);
+      const elapsedSec = Math.max(0.1, (Date.now() - startTime) / 1000);
+      const finalBytesThisSession = manifest.fileSize - initialUploadedBytes;
+      const finalSpeed = Math.round(finalBytesThisSession / elapsedSec);
+      uploadStore.updateProgress(item.id, 100, finalSpeed, manifest.fileSize);
+      uploadStore.markComplete(item.id);
+      await bucketStore.refresh();
+      return item;
+    } catch (directErr) {
+      if (controller.signal.aborted || (directErr instanceof DOMException && directErr.name === 'AbortError')) {
+        throw directErr;
+      }
+      if (isCorsOrNetworkError(directErr)) {
+        await Promise.allSettled([
+          abortUpload(manifest.profile, manifest.uploadId),
+          deleteSession(manifest.uploadId),
+        ]);
+
+        return await executeProxyFallback(item, file, manifest.profile, manifest.key, controller.signal);
+      }
+      throw directErr;
     }
-
-    completedParts.sort((a, b) => a.part_number - b.part_number);
-    await completeUpload(manifest.profile, manifest.uploadId, completedParts, manifest.key);
-
-    await deleteSession(manifest.uploadId);
-    const elapsedSec = Math.max(0.1, (Date.now() - startTime) / 1000);
-    const finalBytesThisSession = manifest.fileSize - initialUploadedBytes;
-    const finalSpeed = Math.round(finalBytesThisSession / elapsedSec);
-    uploadStore.updateProgress(item.id, 100, finalSpeed, manifest.fileSize);
-    uploadStore.markComplete(item.id);
-    await bucketStore.refresh();
-    return item;
   } catch (err) {
     const entry = activeControllers.get(item.id);
     const isUserAborted = entry?.userAborted || false;

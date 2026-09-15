@@ -1,17 +1,6 @@
 use crate::error::AppError;
-use serde::{Deserialize, Serialize};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
-
-/// Serializable data representation of a multipart session snapshot.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SnapshotData {
-    pub bucket: String,
-    pub key: String,
-    pub upload_id: String,
-    pub file_size: u64,
-    pub part_size: u64,
-}
 
 /// Resolves the cache directory path for upload session snapshots:
 /// `~/.cache/r2drive/uploads/`
@@ -70,15 +59,7 @@ pub async fn save_snapshot(
     tokio::fs::create_dir_all(&dir).await?;
 
     let snap_file = snapshot_path_for(snapshot.bucket(), snapshot.key());
-    let data = SnapshotData {
-        bucket: snapshot.bucket().to_string(),
-        key: snapshot.key().to_string(),
-        upload_id: snapshot.expose_upload_id().to_string(),
-        file_size: snapshot.file_size(),
-        part_size: snapshot.part_size(),
-    };
-
-    let json = serde_json::to_string_pretty(&data)
+    let json = serde_json::to_string_pretty(snapshot)
         .map_err(|e| AppError::Config(format!("Failed to serialize upload snapshot: {e}")))?;
 
     tokio::fs::write(&snap_file, json).await?;
@@ -95,18 +76,19 @@ async fn try_resume_snapshot(
         return None;
     }
     let content = tokio::fs::read_to_string(snap_file).await.ok()?;
-    let data = serde_json::from_str::<SnapshotData>(&content).ok()?;
-    if data.bucket != bucket.name() || data.key != key || data.file_size != file_size {
+    let snapshot = match serde_json::from_str::<r2kit::MultipartSessionSnapshot>(&content) {
+        Ok(s) => s,
+        Err(_) => {
+            let _ = tokio::fs::remove_file(snap_file).await;
+            return None;
+        }
+    };
+    if snapshot.bucket() != bucket.name()
+        || snapshot.key() != key
+        || snapshot.file_size() != file_size
+    {
         return None;
     }
-    let snapshot = r2kit::MultipartSessionSnapshot::restore(
-        &data.bucket,
-        &data.key,
-        &data.upload_id,
-        data.file_size,
-        data.part_size,
-    )
-    .ok()?;
     bucket.resume_managed_multipart(snapshot).ok()
 }
 
@@ -201,11 +183,18 @@ pub async fn execute(
         }
         Err(err) => {
             if let Some(snapshot) = err.snapshot() {
-                if let Ok(path) = save_snapshot(snapshot).await {
-                    eprintln!(
-                        "Upload interrupted. Saved resume snapshot to {}",
-                        path.display()
-                    );
+                match save_snapshot(snapshot).await {
+                    Ok(path) => {
+                        eprintln!(
+                            "Upload interrupted. Saved resume snapshot to {}",
+                            path.display()
+                        );
+                    }
+                    Err(save_err) => {
+                        eprintln!(
+                            "Warning: upload interrupted, but failed to save resume snapshot: {save_err}"
+                        );
+                    }
                 }
             } else if was_resuming {
                 // If resuming from an existing snapshot and upload permanently failed without a snapshot,
@@ -242,17 +231,18 @@ mod tests {
     }
 
     #[test]
-    fn test_snapshot_data_serde() {
-        let data = SnapshotData {
-            bucket: "test-bucket".to_string(),
-            key: "test-key".to_string(),
-            upload_id: "up12345".to_string(),
-            file_size: 10485760,
-            part_size: 5242880,
-        };
+    fn test_snapshot_serde() {
+        let snapshot = r2kit::MultipartSessionSnapshot::restore(
+            "test-bucket",
+            "test-key",
+            "up12345",
+            10485760,
+            5242880,
+        )
+        .unwrap();
 
-        let json = serde_json::to_string(&data).unwrap();
-        let decoded: SnapshotData = serde_json::from_str(&json).unwrap();
-        assert_eq!(data, decoded);
+        let json = serde_json::to_string(&snapshot).unwrap();
+        let decoded: r2kit::MultipartSessionSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(snapshot, decoded);
     }
 }
