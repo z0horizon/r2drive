@@ -10,9 +10,14 @@ import {
   type ObjectItem,
   type PrefixListing,
 } from '../api/objects';
-import { getCorsProbeUrl } from '../api/transfers';
+import { getCorsProbe, type ServerFallbackPolicy } from '../api/transfers';
 
 export type CorsStatus = 'unknown' | 'checking' | 'healthy' | 'blocked';
+
+export const DEFAULT_SERVER_FALLBACK_POLICY: ServerFallbackPolicy = {
+  enabled: true,
+  max_payload_bytes: 5 * 1024 * 1024 * 1024,
+};
 
 export interface Breadcrumb {
   label: string;
@@ -28,6 +33,7 @@ export class BucketStore {
   loading = $state<boolean>(false);
   error = $state<string | null>(null);
   corsStatus = $state<CorsStatus>('unknown');
+  serverFallbackPolicy = $state<ServerFallbackPolicy>({ ...DEFAULT_SERVER_FALLBACK_POLICY });
 
   /**
    * Reactive breadcrumb hierarchy derived from current prefix.
@@ -109,7 +115,11 @@ export class BucketStore {
 
     let probeUrl: string;
     try {
-      probeUrl = await getCorsProbeUrl(target);
+      const probeData = await getCorsProbe(target);
+      probeUrl = probeData.probe_url;
+      if (probeData.fallback_policy) {
+        this.serverFallbackPolicy = probeData.fallback_policy;
+      }
     } catch {
       // Backend API error (unauthorized/server error) should not trigger a false-positive CORS blocked banner.
       if (target === this.selectedProfile) {
@@ -215,6 +225,7 @@ export class BucketStore {
     this.loading = false;
     this.error = null;
     this.corsStatus = 'unknown';
+    this.serverFallbackPolicy = { ...DEFAULT_SERVER_FALLBACK_POLICY };
   }
 }
 

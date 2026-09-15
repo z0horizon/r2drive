@@ -7,6 +7,7 @@ import {
   resumeUpload,
   completeUpload,
   abortUpload,
+  getCorsProbe,
   getCorsProbeUrl,
   uploadViaProxy,
 } from './transfers';
@@ -330,6 +331,29 @@ describe('Transfers API (transfers.ts)', () => {
         method: 'POST',
         body: JSON.stringify({ upload_id: 'up-123' }),
       })
+    );
+  });
+
+  it('getCorsProbe fetches presigned probe URL and fallback_policy', async () => {
+    const mockProbe = {
+      probe_url: 'https://r2.example.com/.r2drive-probe?token=xyz',
+      fallback_policy: {
+        enabled: true,
+        max_payload_bytes: 5368709120,
+      },
+    };
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(mockProbe), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    const probeData = await getCorsProbe('primary');
+    expect(probeData).toEqual(mockProbe);
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/buckets/primary/cors-probe',
+      expect.anything()
     );
   });
 

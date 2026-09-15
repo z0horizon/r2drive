@@ -202,7 +202,10 @@ describe('BucketStore (bucket.svelte.ts)', () => {
   it('checkCors sets corsStatus to checking then transitions to healthy on 200/204 OPTIONS response', async () => {
     const store = new BucketStore();
     store.selectedProfile = 'primary';
-    vi.spyOn(transfersApi, 'getCorsProbeUrl').mockResolvedValue('https://probe.r2.test/bucket/.r2drive-probe');
+    vi.spyOn(transfersApi, 'getCorsProbe').mockResolvedValue({
+      probe_url: 'https://probe.r2.test/bucket/.r2drive-probe',
+      fallback_policy: { enabled: true, max_payload_bytes: 5368709120 },
+    });
 
     let fetchResolve: (value: Response) => void;
     const fetchPromise = new Promise<Response>((resolve) => {
@@ -230,10 +233,32 @@ describe('BucketStore (bucket.svelte.ts)', () => {
     expect(store.corsStatus).toBe('healthy');
   });
 
+  it('checkCors updates serverFallbackPolicy when probe returns fallback_policy', async () => {
+    const store = new BucketStore();
+    store.selectedProfile = 'primary';
+    vi.spyOn(transfersApi, 'getCorsProbe').mockResolvedValue({
+      probe_url: 'https://probe.r2.test/bucket/.r2drive-probe',
+      fallback_policy: {
+        enabled: false,
+        max_payload_bytes: 104857600,
+      },
+    });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
+
+    await store.checkCors('primary');
+    expect(store.serverFallbackPolicy).toEqual({
+      enabled: false,
+      max_payload_bytes: 104857600,
+    });
+  });
+
   it('checkCors transitions to blocked on 403 or fetch network failure', async () => {
     const store = new BucketStore();
     store.selectedProfile = 'primary';
-    vi.spyOn(transfersApi, 'getCorsProbeUrl').mockResolvedValue('https://probe.r2.test/bucket/.r2drive-probe');
+    vi.spyOn(transfersApi, 'getCorsProbe').mockResolvedValue({
+      probe_url: 'https://probe.r2.test/bucket/.r2drive-probe',
+      fallback_policy: { enabled: true, max_payload_bytes: 5368709120 },
+    });
 
     // 403 Forbidden
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 403 }));
@@ -250,7 +275,7 @@ describe('BucketStore (bucket.svelte.ts)', () => {
   it('backend probe API error leaves corsStatus as unknown rather than false-positive blocked', async () => {
     const store = new BucketStore();
     store.selectedProfile = 'primary';
-    vi.spyOn(transfersApi, 'getCorsProbeUrl').mockRejectedValue(new Error('Probe URL API failed'));
+    vi.spyOn(transfersApi, 'getCorsProbe').mockRejectedValue(new Error('Probe URL API failed'));
     await store.checkCors('primary');
     expect(store.corsStatus).toBe('unknown');
   });
@@ -258,7 +283,10 @@ describe('BucketStore (bucket.svelte.ts)', () => {
   it('checkCors respects caching when force = false', async () => {
     const store = new BucketStore();
     store.selectedProfile = 'primary';
-    const probeSpy = vi.spyOn(transfersApi, 'getCorsProbeUrl').mockResolvedValue('https://probe.r2.test');
+    const probeSpy = vi.spyOn(transfersApi, 'getCorsProbe').mockResolvedValue({
+      probe_url: 'https://probe.r2.test',
+      fallback_policy: { enabled: true, max_payload_bytes: 5368709120 },
+    });
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
 
     store.corsStatus = 'healthy';
@@ -298,7 +326,10 @@ describe('BucketStore (bucket.svelte.ts)', () => {
   it('checkCors defaults to selectedProfile if profile argument is omitted', async () => {
     const store = new BucketStore();
     store.selectedProfile = 'current-profile';
-    const probeSpy = vi.spyOn(transfersApi, 'getCorsProbeUrl').mockResolvedValue('https://probe.r2.test');
+    const probeSpy = vi.spyOn(transfersApi, 'getCorsProbe').mockResolvedValue({
+      probe_url: 'https://probe.r2.test',
+      fallback_policy: { enabled: true, max_payload_bytes: 5368709120 },
+    });
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
 
     await store.checkCors();
@@ -314,7 +345,10 @@ describe('BucketStore (bucket.svelte.ts)', () => {
     const fetchPromise = new Promise<Response>((resolve) => {
       fetchResolve = resolve;
     });
-    vi.spyOn(transfersApi, 'getCorsProbeUrl').mockResolvedValue('https://probe.r2.test/bucket-a/.r2drive-probe');
+    vi.spyOn(transfersApi, 'getCorsProbe').mockResolvedValue({
+      probe_url: 'https://probe.r2.test/bucket-a/.r2drive-probe',
+      fallback_policy: { enabled: true, max_payload_bytes: 5368709120 },
+    });
     vi.spyOn(globalThis, 'fetch').mockImplementation(() => fetchPromise);
 
     // Start probe for bucket-a
@@ -333,15 +367,15 @@ describe('BucketStore (bucket.svelte.ts)', () => {
     expect(store.corsStatus).toBe('unknown');
   });
 
-  it('does not overwrite corsStatus if selectedProfile changed while getCorsProbeUrl was pending', async () => {
+  it('does not overwrite corsStatus if selectedProfile changed while getCorsProbe was pending', async () => {
     const store = new BucketStore();
     store.selectedProfile = 'bucket-a';
 
-    let probeResolve: (value: string) => void;
-    const probePromise = new Promise<string>((resolve) => {
+    let probeResolve: (value: transfersApi.CorsProbeResponse) => void;
+    const probePromise = new Promise<transfersApi.CorsProbeResponse>((resolve) => {
       probeResolve = resolve;
     });
-    vi.spyOn(transfersApi, 'getCorsProbeUrl').mockReturnValue(probePromise);
+    vi.spyOn(transfersApi, 'getCorsProbe').mockReturnValue(probePromise);
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
 
     const checkPromise = store.checkCors('bucket-a');
@@ -351,7 +385,10 @@ describe('BucketStore (bucket.svelte.ts)', () => {
     store.selectedProfile = 'bucket-b';
     store.corsStatus = 'unknown';
 
-    probeResolve!('https://probe.r2.test/bucket-a/.r2drive-probe');
+    probeResolve!({
+      probe_url: 'https://probe.r2.test/bucket-a/.r2drive-probe',
+      fallback_policy: { enabled: true, max_payload_bytes: 5368709120 },
+    });
     await checkPromise;
 
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -360,6 +397,26 @@ describe('BucketStore (bucket.svelte.ts)', () => {
 });
 
 describe('UploadStore (upload.svelte.ts)', () => {
+  const storageMap = new Map<string, string>();
+  const mockLocalStorage = {
+    getItem: vi.fn((key: string) => storageMap.get(key) ?? null),
+    setItem: vi.fn((key: string, val: string) => {
+      storageMap.set(key, val);
+    }),
+    removeItem: vi.fn((key: string) => {
+      storageMap.delete(key);
+    }),
+    clear: vi.fn(() => {
+      storageMap.clear();
+    }),
+  };
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    storageMap.clear();
+    vi.stubGlobal('localStorage', mockLocalStorage);
+  });
+
   it('adds items and initializes queued state', () => {
     const store = new UploadStore();
     const fakeFile = new File(['hello world'], 'hello.txt', { type: 'text/plain' });
@@ -465,5 +522,20 @@ describe('UploadStore (upload.svelte.ts)', () => {
     store.clearCompleted();
     expect(store.items.length).toBe(1);
     expect(store.items[0].id).toBe(i2.id);
+  });
+
+  it('initializes proxyFallbackPreference from localStorage or defaults to true', () => {
+    localStorage.removeItem('r2drive_proxy_fallback_enabled');
+    const store1 = new UploadStore();
+    expect(store1.proxyFallbackPreference).toBe(true);
+
+    localStorage.setItem('r2drive_proxy_fallback_enabled', 'false');
+    const store2 = new UploadStore();
+    expect(store2.proxyFallbackPreference).toBe(false);
+
+    store2.setProxyFallbackPreference(true);
+    expect(store2.proxyFallbackPreference).toBe(true);
+    expect(localStorage.getItem('r2drive_proxy_fallback_enabled')).toBe('true');
+    localStorage.removeItem('r2drive_proxy_fallback_enabled');
   });
 });

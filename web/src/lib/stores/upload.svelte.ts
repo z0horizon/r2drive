@@ -28,8 +28,35 @@ export interface AddUploadOptions {
   name?: string;
 }
 
+export const PROXY_FALLBACK_STORAGE_KEY = 'r2drive_proxy_fallback_enabled';
+
+function loadProxyFallbackPreference(): boolean {
+  if (typeof localStorage === 'undefined') return true;
+  try {
+    const val = localStorage.getItem(PROXY_FALLBACK_STORAGE_KEY);
+    return val === null ? true : val === 'true';
+  } catch {
+    return true;
+  }
+}
+
 export class UploadStore {
   items = $state<UploadItem[]>([]);
+  proxyFallbackPreference = $state<boolean>(loadProxyFallbackPreference());
+
+  /**
+   * Sets user fallback preference and persists to localStorage.
+   */
+  setProxyFallbackPreference(enabled: boolean): void {
+    this.proxyFallbackPreference = enabled;
+    if (typeof localStorage !== 'undefined') {
+      try {
+        localStorage.setItem(PROXY_FALLBACK_STORAGE_KEY, String(enabled));
+      } catch {
+        // Ignore localStorage write errors
+      }
+    }
+  }
 
   /**
    * Returns list of currently active or queued uploads.

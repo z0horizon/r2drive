@@ -138,17 +138,35 @@ export async function abortUpload(
   );
 }
 
+export interface ServerFallbackPolicy {
+  enabled: boolean;
+  max_payload_bytes: number;
+}
+
+export interface CorsProbeResponse {
+  probe_url: string;
+  fallback_policy: ServerFallbackPolicy;
+}
+
+/**
+ * Fetches a presigned probe URL and server FallbackPolicy used to perform an
+ * OPTIONS preflight check for CORS and detect proxy upload availability.
+ *
+ * @param profile The bucket profile name.
+ */
+export async function getCorsProbe(profile: string): Promise<CorsProbeResponse> {
+  return apiRequest<CorsProbeResponse>(
+    `/api/buckets/${encodeURIComponent(profile)}/cors-probe`
+  );
+}
+
 /**
  * Fetches a presigned probe URL used to perform an OPTIONS preflight check for CORS.
  *
  * @param profile The bucket profile name.
  */
 export async function getCorsProbeUrl(profile: string): Promise<string> {
-  return (
-    await apiRequest<{ probe_url: string }>(
-      `/api/buckets/${encodeURIComponent(profile)}/cors-probe`
-    )
-  ).probe_url;
+  return (await getCorsProbe(profile)).probe_url;
 }
 
 export interface ProxyUploadResponse {
